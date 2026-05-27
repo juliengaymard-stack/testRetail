@@ -3,7 +3,8 @@ import os
 import time
 import random
 import requests
-from scipy.optimize import minimize_scalar
+import itertools
+from scipy.optimize import minimize_scalar, brentq
 
 # =====================================================================
 # 1. PARAMÈTRES GLOBAUX & CONFIGURATION
@@ -15,27 +16,19 @@ BONUS_UI = 1.02
 QUANTITE_LOT = 1     
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json",
-    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
 }
 
+# --- TON EMPIRE IMMOBILIER RÉEL ---
+# Chaque bâtiment est une entité unique. Facilement modifiable via une UI plus tard.
 CONFIG_BATIMENTS = {
-    "Groceries Store": {
-        "niv_bat": 5,
-        "salaire_bat": 755,
-        "ids": ["3", "4", "5", "7", "8", "9", "119", "122", "123", "124", "125", "126", "127"]
-    },
-    "Fashion Store": {
-        "niv_bat": 2,
-        "salaire_bat": 679,
-        "ids": ["60", "61", "62", "63", "64", "65"]
-    },
-    "Car Retail Store": {
-        "niv_bat": 3,
-        "salaire_bat": 1246,
-        "ids": ["53", "54", "55", "56", "57"]
-    }
+    "Car Retail Store #1": {"niv_bat": 3, "salaire_bat": 1259, "ids": ["53", "54", "55", "56", "57"]},
+    "Car Retail Store #2": {"niv_bat": 3, "salaire_bat": 1259, "ids": ["53", "54", "55", "56", "57"]},
+    "Car Retail Store #3": {"niv_bat": 3, "salaire_bat": 1259, "ids": ["53", "54", "55", "56", "57"]},
+    "Car Retail Store #4": {"niv_bat": 3, "salaire_bat": 1259, "ids": ["53", "54", "55", "56", "57"]},
+    "Fashion Store #1":    {"niv_bat": 2, "salaire_bat": 687,  "ids": ["60", "61", "62", "63", "64", "65"]},
+    "Groceries Store #1":  {"niv_bat": 5, "salaire_bat": 763,  "ids": ["3", "4", "5", "8", "9", "119", "122", "123", "124", "125", "126", "127"]}
 }
 
 try:
@@ -64,7 +57,7 @@ def calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix, qua
     multiplicateur_bonus = 1 / bonus_ui 
     Uor = 370
     Kor_table = {"B": 2.28}
-    RETAIL_MODELING_QUALITY_WEIGHT = 0.3 
+    RETAIL_WEIGHT = 0.3 
     
     facteur_sat = min(max(2 - saturation, 0), 2)
     volume_min = max(0.9, facteur_sat / 2 + 0.5)
@@ -74,7 +67,7 @@ def calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix, qua
     k_val = Kor_table.get(str(id_obj), 1)
     
     f = qualite / 12
-    resistivite = Uor * (L * Um + 1) * k_val * (facteur_sat / 2 * (1 + f * RETAIL_MODELING_QUALITY_WEIGHT))
+    resistivite = Uor * (L * Um + 1) * k_val * (facteur_sat / 2 * (1 + f * RETAIL_WEIGHT))
     capacite_vente = Um * volume_min
     
     salaire = stats.get("modeledStoreWages", 0)
@@ -86,201 +79,219 @@ def calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix, qua
     
     return (temps_sec * quantite) / niveau_bat
 
-
-# =====================================================================
-# 3. OPTIMISATEUR DE PROFIT
-# =====================================================================
-
 def trouver_profit_maximum(id_obj, stats, qualite, saturation, bonus_ui, prix_achat, quantite, salaire_horaire_batiment, niv_batiment):
     def objective(prix_test):
         temps_sec = calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix_test, quantite, niv_batiment)
         if temps_sec <= 0: return 1e9 
-        
         temps_heures = temps_sec / 3600
-        marge_totale = (prix_test - prix_achat) * quantite
-        profit_horaire = (marge_totale / temps_heures) - salaire_horaire_batiment
+        profit_horaire = (((prix_test - prix_achat) * quantite) / temps_heures) - salaire_horaire_batiment
         return -profit_horaire 
 
-    res = minimize_scalar(
-        objective, 
-        bracket=(prix_achat + 0.01, prix_achat + 1000), 
-        method='brent'
-    )
-    
+    res = minimize_scalar(objective, bracket=(prix_achat + 0.01, prix_achat + 1000), method='brent')
     prix_optimal = round(res.x, 2)
     temps_sec = calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix_optimal, quantite, niv_batiment)
     
-    if temps_sec <= 0:
-        return prix_optimal, 0, {"temps_vente": 0, "profit_net_total": 0}
+    if temps_sec <= 0: return prix_optimal, 0, {"temps_vente": 0, "profit_net_total": 0}
         
     temps_heures = temps_sec / 3600
-    marge_totale = (prix_optimal - prix_achat) * quantite
-    profit_max_reel = (marge_totale / temps_heures) - salaire_horaire_batiment
+    profit_max_reel = (((prix_optimal - prix_achat) * quantite) / temps_heures) - salaire_horaire_batiment
     
-    return prix_optimal, profit_max_reel, {
-        "temps_vente": temps_sec,
-        "profit_net_total": marge_totale - (salaire_horaire_batiment * temps_heures)
-    }
+    return prix_optimal, profit_max_reel, {"temps_vente": temps_sec}
 
 
 # =====================================================================
-# 4. INTERFACES API MARCHÉ
+# 3. INTERFACES API MARCHÉ
 # =====================================================================
 
 def get_all_saturations():
     url = "https://www.simcompanies.com/api/v4/0/resources-retail-info/"
     saturations = {}
     try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        response.raise_for_status() 
-        data_json = response.json()
-        
-        if isinstance(data_json, list):
-            for item in data_json:
+        res = requests.get(url, headers=HEADERS, timeout=10).json()
+        if isinstance(res, list):
+            for item in res:
                 item_id = str(item.get('dbLetter', ''))
-                if item_id:
-                    saturations[item_id] = float(item.get('saturation', 0.5))
+                if item_id: saturations[item_id] = float(item.get('saturation', 0.5))
         return saturations
-    except Exception as e:
-        print(f"  [!] Erreur réseau lors de la récupération des saturations globales : {e}")
+    except:
         return {}
 
-def get_best_offers_by_quality(id_obj, retries=4):
+def get_best_offers_by_quality(id_obj):
     url = f"https://www.simcompanies.com/api/v3/market/0/{id_obj}/"
-    for attempt in range(retries):
+    for attempt in range(4):
         try:
-            response = requests.get(url, headers=HEADERS, timeout=10)
-            if response.status_code == 429:
-                wait_time = (2 ** attempt) * 5 + random.uniform(1, 3)
-                print(f"  [!] Limite API (429). Pause de {wait_time:.1f}s...")
-                time.sleep(wait_time)
+            res = requests.get(url, headers=HEADERS, timeout=10)
+            if res.status_code == 429:
+                time.sleep((2 ** attempt) * 5 + random.uniform(1, 3))
                 continue
-            if response.status_code != 200:
+            if res.status_code != 200:
                 time.sleep(2)
                 continue
-                
-            data_json = response.json()
-            if isinstance(data_json, list): offres = data_json
-            elif isinstance(data_json, dict): offres = data_json.get("sellOrders", [])
-            else: offres = []
-                
-            if not offres: return {}
-
+            
+            offres = res.json()
+            if isinstance(offres, dict): offres = offres.get("sellOrders", [])
+            
             best_prices = {}
-            for offre in offres:
-                q = offre.get('quality', 0)
-                p = offre.get('price', 0)
-                if p <= 0: continue
-                if q not in best_prices or p < best_prices[q]['price']:
-                    best_prices[q] = {'price': p, 'quantity': offre.get('quantity', 0)}
+            for o in offres:
+                q, p = o.get('quality', 0), o.get('price', 0)
+                if p > 0 and (q not in best_prices or p < best_prices[q]['price']):
+                    best_prices[q] = p
             return best_prices
-            
-        except requests.exceptions.RequestException as e:
-            wait_time = (2 ** attempt) * 2
-            time.sleep(wait_time)
-            
+        except:
+            time.sleep(2)
     return {}
 
 
 # =====================================================================
-# 5. UTILITAIRES & BOUCLE PRINCIPALE
+# 4. L'OPTIMISEUR COMBINATOIRE DE PORTEFEUILLE 
 # =====================================================================
 
-def format_temps(s):
-    if s <= 0: return "Impossible"
-    h, m = divmod(int(s), 3600)
-    m, s = divmod(m, 60)
-    return f"{h}h {m:02d}m {s:02d}s"
+def evaluer_combinaison(combo, budget_total):
+    choix_tries = sorted(combo, key=lambda x: x['roce'], reverse=True)
+    
+    profit_total = 0
+    budget_restant = budget_total
+    details = []
 
-def lancer_scan_complet():
+    for choix in choix_tries:
+        if choix['cost'] == 0:
+            details.append({"choix": choix, "ratio": 0, "statut": "Vide (Volontaire)"})
+            continue
+            
+        if budget_restant >= choix['cost']:
+            profit_total += choix['profit']
+            budget_restant -= choix['cost']
+            details.append({"choix": choix, "ratio": 1.0, "statut": "✅ Plein (100%)"})
+        elif budget_restant > 0:
+            ratio = budget_restant / choix['cost']
+            profit_total += choix['profit'] * ratio
+            details.append({"choix": choix, "ratio": ratio, "statut": f"⚠️ Partiel ({ratio:.0%})"})
+            budget_restant = 0
+        else:
+            details.append({"choix": choix, "ratio": 0.0, "statut": "❌ Manque de Cash"})
+            
+    return profit_total, details, budget_restant
+
+def optimiser_allocation_budget(budget_total, heures_cibles):
     print(f"\n{'='*80}")
-    print(f"🚀 LANCEMENT DU SCAN MULTI-BÂTIMENTS")
+    print(f"🧠 DIRECTEUR FINANCIER : ALLOCATION DU CAPITAL")
+    print(f"🏢 Empire : {len(CONFIG_BATIMENTS)} Bâtiments | 💵 Cash : {budget_total:,.0f} $ | ⏱️ Temps : {heures_cibles}h")
     print(f"{'='*80}")
-    
-    print("\n📥 Téléchargement des saturations de marché...")
-    saturations_globales = get_all_saturations()
-    if not saturations_globales:
-        print("⚠️ Attention : Impossible de récupérer les saturations globales. Utilisation de 0.5 par défaut.")
-    else:
-        print(f"✅ Saturations récupérées pour {len(saturations_globales)} ressources !")
 
-    top_opportunites_batiments = {}
+    print("📥 1. Scan global du marché en cours...")
+    saturations = get_all_saturations()
     
+    # Pour ne pas requêter l'API 4 fois pour les 4 Car Retail Stores, 
+    # on met en cache les offres récupérées.
+    cache_offres = {} 
+    toutes_options_par_batiment = {}
+
     for nom_batiment, config in CONFIG_BATIMENTS.items():
-        print(f"\n>>> 🏬 RECHERCHE POUR : {nom_batiment.upper()} (Niv {config['niv_bat']}, Salaires {config['salaire_bat']}$/h) <<<")
-        
-        meilleure_opp_batiment = None
-        profit_max_batiment = -float('inf')
+        options_batiment = []
+        options_batiment.append({"batiment": nom_batiment, "item_name": "Aucun", "cost": 0, "profit": 0, "roce": 0})
         
         for obj_id in config["ids"]:
-            if str(obj_id) not in data["phase_1"]:
-                continue
-                
+            if str(obj_id) not in data["phase_1"]: continue
             stats = data["phase_1"][str(obj_id)]
             item_name = stats.get("name", f"Item_{obj_id}")
-            sat_reelle = saturations_globales.get(str(obj_id), 0.5)
+            sat_reelle = saturations.get(str(obj_id), 0.5)
             
-            meilleures_offres = get_best_offers_by_quality(obj_id)
-            time.sleep(random.uniform(2.0, 4.0)) 
+            if obj_id not in cache_offres:
+                cache_offres[obj_id] = get_best_offers_by_quality(obj_id)
+                time.sleep(random.uniform(1.0, 2.0))
             
-            if not meilleures_offres:
-                print(f"  - {item_name:<22} | Sat: {sat_reelle:6.1%} | Aucune offre en vente.")
-                continue
-                
-            # Variables pour pister le meilleur profit de cet objet précis
-            profit_max_item = -float('inf')
-            meilleure_q_item = None
+            offres = cache_offres[obj_id]
             
-            for qualite, info in meilleures_offres.items():
-                prix_achat = info['price']
-                
-                prix_vente_opt, profit_h, stats_opt = trouver_profit_maximum(
-                    str(obj_id), stats, qualite, sat_reelle, BONUS_UI, 
-                    prix_achat, QUANTITE_LOT, config['salaire_bat'], config['niv_bat']
+            for q, prix_achat in offres.items():
+                prix_vente, profit_h, stats_opt = trouver_profit_maximum(
+                    str(obj_id), stats, q, sat_reelle, BONUS_UI, prix_achat, 1, config['salaire_bat'], config['niv_bat']
                 )
                 
-                # Mise à jour du meilleur profit pour cet objet
-                if profit_h > profit_max_item:
-                    profit_max_item = profit_h
-                    meilleure_q_item = qualite
+                t_sec = stats_opt["temps_vente"]
+                if t_sec <= 0 or profit_h <= 0: continue
                 
-                # Mise à jour du meilleur profit GLOBAL pour le bâtiment
-                if profit_h > profit_max_batiment:
-                    profit_max_batiment = profit_h
-                    meilleure_opp_batiment = {
-                        "id": obj_id,
-                        "name": item_name,
-                        "q": qualite, 
-                        "achat": prix_achat, 
-                        "vente": prix_vente_opt, 
-                        "profit": profit_h, 
-                        "temps": stats_opt['temps_vente']
-                    }
-            
-            # --- AFFICHAGE LORS DU DÉFILEMENT ---
-            if profit_max_item > -float('inf'):
-                print(f"  - {item_name:<22} | Sat: {sat_reelle:6.1%} | {len(meilleures_offres):>2} qualités | Max: {profit_max_item:8.2f} $/h (Q{meilleure_q_item})")
-            else:
-                print(f"  - {item_name:<22} | Sat: {sat_reelle:6.1%} | {len(meilleures_offres):>2} qualités | Aucun profit possible.")
+                unites_totales = (3600 / t_sec) * heures_cibles
+                cout_total = unites_totales * prix_achat
+                profit_total = profit_h * heures_cibles
+                roce = profit_total / cout_total if cout_total > 0 else 0
+                
+                options_batiment.append({
+                    "batiment": nom_batiment, "id": obj_id, "item_name": item_name, "q": q,
+                    "prix_achat": prix_achat, "prix_vente": prix_vente, 
+                    "quantite": unites_totales, "cost": cout_total, 
+                    "profit": profit_total, "roce": roce
+                })
+                
+        # Frontière de Pareto stricte pour éviter l'explosion combinatoire
+        options_batiment.sort(key=lambda x: x['cost'])
+        options_epurees = []
+        max_profit_vu = -1
         
-        if meilleure_opp_batiment:
-            top_opportunites_batiments[nom_batiment] = meilleure_opp_batiment
-
-    # --- AFFICHAGE DES RÉSULTATS ---
-    print(f"\n\n{'='*80}\n🏆 TABLEAU DE BORD : LES MEILLEURS COUPS PAR BÂTIMENT 🏆\n{'='*80}")
+        for opt in options_batiment:
+            if opt['profit'] > max_profit_vu:
+                options_epurees.append(opt)
+                max_profit_vu = opt['profit']
+                
+        toutes_options_par_batiment[nom_batiment] = options_epurees
     
-    if not top_opportunites_batiments:
-        print("Aucune opportunité rentable trouvée sur l'ensemble des marchés.")
-    else:
-        for nom_bat, res in top_opportunites_batiments.items():
-            print(f"\n📍 {nom_bat.upper()} :")
-            print(f"   👉 Produit idéal : {res['name']} (ID {res['id']}, Qualité Q{res['q']})")
-            print(f"   🛒 Acheter à : {res['achat']:.2f} $")
-            print(f"   🏷️ Revendre à : {res['vente']:.2f} $")
-            print(f"   ⏱️ Temps estimé : {format_temps(res['temps'])}")
-            print(f"   💰 PROFIT MAX : {res['profit']:.2f} $/heure")
-            
-    print(f"\n{'='*80}")
+    # 2. Simulation Mathématique
+    # On calcule combien de combinaisons on va tester pour le log.
+    nb_combinaisons = 1
+    for opt_list in toutes_options_par_batiment.values():
+        nb_combinaisons *= len(opt_list)
+        
+    print(f"🧮 2. Analyse combinatoire : {nb_combinaisons:,.0f} scénarios stratégiques testés...")
+    
+    listes_options = list(toutes_options_par_batiment.values())
+    combinaisons = list(itertools.product(*listes_options))
+    
+    meilleur_profit_global = -1
+    meilleur_plan_action = None
+    cash_restant_final = 0
 
+    for combo in combinaisons:
+        profit, details, cash_rest = evaluer_combinaison(combo, budget_total)
+        if profit > meilleur_profit_global:
+            meilleur_profit_global = profit
+            meilleur_plan_action = details
+            cash_restant_final = cash_rest
+
+    # 3. Affichage du résultat
+    print(f"\n{'='*80}")
+    print(f"🏆 PLAN D'ACTION STRATÉGIQUE OPTIMAL")
+    print(f"{'='*80}")
+    
+    meilleur_plan_action.sort(key=lambda x: list(CONFIG_BATIMENTS.keys()).index(x['choix']['batiment']))
+    
+    for action in meilleur_plan_action:
+        c = action['choix']
+        ratio = action['ratio']
+        print(f"\n📍 {c['batiment'].upper()} : {action['statut']}")
+        
+        if c['cost'] > 0 and ratio > 0:
+            q_reelle = c['quantite'] * ratio
+            cout_reel = c['cost'] * ratio
+            profit_reel = c['profit'] * ratio
+            heures_reelles = heures_cibles * ratio
+            
+            print(f"   👉 Produit    : {c['item_name']} (Qualité Q{c['q']})")
+            print(f"   🛒 Ordre      : {q_reelle:.0f} unités à {c['prix_achat']:.2f}$ (Total: {cout_reel:,.0f} $)")
+            print(f"   🏷️ Revente    : {c['prix_vente']:.2f} $")
+            print(f"   ⏱️ Durée      : {heures_reelles:.1f} heures")
+            print(f"   💰 Profit Net : {profit_reel:,.0f} $ (ROCE: {c['roce']*100:.1f}%)")
+        elif c['cost'] > 0 and ratio == 0:
+            print(f"   ❌ Ignoré pour privilégier la trésorerie d'autres bâtiments plus rentables.")
+
+    print(f"\n{'-'*80}")
+    print(f"💵 Trésorerie dormante (inutilisée) : {cash_restant_final:,.0f} $")
+    print(f"🚀 PROFIT NET TOTAL GÉNÉRÉ        : {meilleur_profit_global:,.0f} $")
+    print(f"{'='*80}\n")
+
+
+# =====================================================================
+# MENU DE LANCEMENT
+# =====================================================================
 if __name__ == "__main__":
-    lancer_scan_complet()
+    
+    # Règle ici ton Cash en banque et le temps que tu veux couvrir
+    optimiser_allocation_budget(budget_total=250000, heures_cibles=8)
