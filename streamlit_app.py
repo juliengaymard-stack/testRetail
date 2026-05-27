@@ -345,6 +345,7 @@ def main():
                                 profit_max_batiment = profit_h
                                 meilleure_opp_batiment = {
                                     "id": obj_id,
+                                    "nom_produit": stats.get('name', f'Product {obj_id}'),
                                     "q": qualite, 
                                     "achat": prix_achat, 
                                     "vente": prix_vente_opt, 
@@ -364,24 +365,27 @@ def main():
                 # Cards de résultats
                 for nom_bat, res in top_opportunites_batiments.items():
                     with st.container():
-                        col1, col2, col3, col4 = st.columns(4)
+                        # Bâtiment sur sa propre ligne
+                        st.subheader(f"🏬 {nom_bat}")
+                        
+                        col1, col2, col3, col4, col5 = st.columns(5)
                         
                         with col1:
-                            st.metric("Bâtiment", nom_bat)
+                            st.metric("Produit", res['nom_produit'])
                         with col2:
-                            st.metric("Produit ID", f"Q{res['q']}")
+                            st.metric("Qualité", f"Q{res['q']}")
                         with col3:
-                            st.metric("Achat", f"${res['achat']:.0f}")
+                            st.metric("Achat", f"${res['achat']:.2f}")
                         with col4:
-                            st.metric("Vente", f"${res['vente']:.0f}")
+                            st.metric("Vente", f"${res['vente']:.2f}")
+                        with col5:
+                            st.metric("Profit/h", f"${res['profit']:.2f}")
                         
-                        col1, col2, col3 = st.columns(3)
+                        col1, col2 = st.columns(2)
                         
                         with col1:
-                            st.metric("Profit/h", f"${res['profit']:.2f}", delta=f"+{(res['profit'])*100/100:.0f}%")
-                        with col2:
                             st.metric("Temps", format_temps(res['temps']))
-                        with col3:
+                        with col2:
                             st.metric("Profit Total", f"${res['profit'] * 10:.2f}")
                         
                         st.divider()
@@ -390,10 +394,10 @@ def main():
                 df_results = pd.DataFrame([
                     {
                         "Bâtiment": nom_bat,
-                        "Produit ID": res['id'],
-                        "Qualité": res['q'],
-                        "Achat ($)": res['achat'],
-                        "Vente ($)": f"{res['vente']:.0f}",
+                        "Produit": res['nom_produit'],
+                        "Qualité": f"Q{res['q']}",
+                        "Achat ($)": f"{res['achat']:.2f}",
+                        "Vente ($)": f"{res['vente']:.2f}",
                         "Profit/h ($)": f"{res['profit']:.2f}",
                         "Temps": format_temps(res['temps'])
                     }
@@ -446,8 +450,8 @@ def main():
                             "ID": obj_id,
                             "Qualité": qualite,
                             "Saturation": f"{sat:.1%}",
-                            "Achat": f"${info['price']:.0f}",
-                            "Vente Optimal": f"${prix_vente_opt:.0f}",
+                            "Achat": f"${info['price']:.2f}",
+                            "Vente Optimal": f"${prix_vente_opt:.2f}",
                             "Profit/h": f"${profit_h:.2f}"
                         })
                 
