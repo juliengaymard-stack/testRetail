@@ -236,6 +236,47 @@ def main():
         value=1
     )
     
+    # Configuration des bâtiments
+    st.sidebar.header("🏬 Paramètres des Bâtiments")
+    
+    # Initialiser les paramètres modifiables en session state
+    if "custom_config" not in st.session_state:
+        st.session_state.custom_config = {name: config.copy() for name, config in CONFIG_BATIMENTS.items()}
+    
+    # Éditeur de paramètres
+    with st.sidebar.expander("✏️ Modifier Niveaux & Salaires"):
+        for nom_batiment in CONFIG_BATIMENTS.keys():
+            st.subheader(f"{nom_batiment}")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.session_state.custom_config[nom_batiment]["niv_bat"] = st.number_input(
+                    f"Niveau - {nom_batiment}",
+                    min_value=1,
+                    value=st.session_state.custom_config[nom_batiment]["niv_bat"],
+                    key=f"niv_{nom_batiment}"
+                )
+            
+            with col2:
+                st.session_state.custom_config[nom_batiment]["salaire_bat"] = st.number_input(
+                    f"Salaire/h - {nom_batiment}",
+                    min_value=0,
+                    value=st.session_state.custom_config[nom_batiment]["salaire_bat"],
+                    key=f"sal_{nom_batiment}"
+                )
+    
+    # Sélection des bâtiments à scanner
+    batiments_disponibles = list(CONFIG_BATIMENTS.keys())
+    batiments_selectionnes = st.sidebar.multiselect(
+        "🏢 Bâtiments à scanner",
+        batiments_disponibles,
+        default=batiments_disponibles
+    )
+    
+    if not batiments_selectionnes:
+        st.warning("⚠️ Sélectionnez au moins un bâtiment à scanner")
+        return
+    
     # Charger les données
     data = load_database()
     
@@ -247,7 +288,7 @@ def main():
     tab1, tab2, tab3 = st.tabs(["🚀 Scanner", "📈 Détails", "ℹ️ À Propos"])
     
     with tab1:
-        st.header("Lancement du Scan Complet")
+        st.header("Lancement du Scan")
         
         if st.button("🔍 LANCER LE SCAN", key="launch_scan", type="primary"):
             with st.spinner("📥 Téléchargement des données de marché..."):
@@ -261,16 +302,22 @@ def main():
             results_placeholder = st.empty()
             
             top_opportunites_batiments = {}
-            total_items = sum(len(config["ids"]) for config in CONFIG_BATIMENTS.values())
+            
+            # Compter les items
+            total_items = sum(
+                len(CONFIG_BATIMENTS[nom]["ids"]) 
+                for nom in batiments_selectionnes
+            )
             current_item = 0
             
-            # Boucle principale
-            for nom_batiment, config in CONFIG_BATIMENTS.items():
+            # Boucle principale - scanner seulement les bâtiments sélectionnés
+            for nom_batiment in batiments_selectionnes:
+                config = st.session_state.custom_config[nom_batiment]
                 meilleure_opp_batiment = None
                 profit_max_batiment = -float('inf')
                 
                 with st.spinner(f"🏬 Analyse {nom_batiment}..."):
-                    for obj_id in config["ids"]:
+                    for obj_id in CONFIG_BATIMENTS[nom_batiment]["ids"]:
                         current_item += 1
                         progress_bar.progress(current_item / total_items)
                         
@@ -358,49 +405,56 @@ def main():
     with tab2:
         st.header("📊 Données Détaillées")
         
-        batiment_selected = st.selectbox("Sélectionnez un bâtiment", list(CONFIG_BATIMENTS.keys()))
+        # Utiliser uniquement les bâtiments sélectionnés
+        batiments_disponibles_details = [b for b in batiments_selectionnes]
         
-        st.write(f"**Configuration:** Niveau {CONFIG_BATIMENTS[batiment_selected]['niv_bat']} | "
-                f"Salaire: ${CONFIG_BATIMENTS[batiment_selected]['salaire_bat']}/h")
-        
-        ids_selected = st.multiselect(
-            "IDs de produits à analyser",
-            CONFIG_BATIMENTS[batiment_selected]["ids"],
-            default=CONFIG_BATIMENTS[batiment_selected]["ids"][:3]
-        )
-        
-        if st.button("Analyser"):
-            saturations_globales = get_all_saturations()
+        if batiments_disponibles_details:
+            batiment_selected = st.selectbox("Sélectionnez un bâtiment", batiments_disponibles_details)
             
-            results = []
-            for obj_id in ids_selected:
-                if str(obj_id) not in data["phase_1"]:
-                    continue
+            config_selected = st.session_state.custom_config[batiment_selected]
+            st.write(f"**Configuration:** Niveau {config_selected['niv_bat']} | "
+                    f"Salaire: ${config_selected['salaire_bat']}/h")
+            
+            ids_selected = st.multiselect(
+                "IDs de produits à analyser",
+                CONFIG_BATIMENTS[batiment_selected]["ids"],
+                default=CONFIG_BATIMENTS[batiment_selected]["ids"][:3]
+            )
+            
+            if st.button("Analyser"):
+                saturations_globales = get_all_saturations()
                 
-                stats = data["phase_1"][str(obj_id)]
-                sat = saturations_globales.get(str(obj_id), 0.5)
-                offres = get_best_offers_by_quality(obj_id)
-                time.sleep(0.3)
-                
-                for qualite, info in offres.items():
-                    prix_vente_opt, profit_h, _ = trouver_profit_maximum(
-                        str(obj_id), stats, qualite, sat, bonus_ui,
-                        info['price'], quantite_lot, 
-                        CONFIG_BATIMENTS[batiment_selected]['salaire_bat'],
-                        CONFIG_BATIMENTS[batiment_selected]['niv_bat']
-                    )
+                results = []
+                for obj_id in ids_selected:
+                    if str(obj_id) not in data["phase_1"]:
+                        continue
                     
-                    results.append({
-                        "ID": obj_id,
-                        "Qualité": qualite,
-                        "Saturation": f"{sat:.1%}",
-                        "Achat": f"${info['price']:.0f}",
-                        "Vente Optimal": f"${prix_vente_opt:.0f}",
-                        "Profit/h": f"${profit_h:.2f}"
-                    })
-            
-            if results:
-                st.dataframe(pd.DataFrame(results), use_container_width=True)
+                    stats = data["phase_1"][str(obj_id)]
+                    sat = saturations_globales.get(str(obj_id), 0.5)
+                    offres = get_best_offers_by_quality(obj_id)
+                    time.sleep(0.3)
+                    
+                    for qualite, info in offres.items():
+                        prix_vente_opt, profit_h, _ = trouver_profit_maximum(
+                            str(obj_id), stats, qualite, sat, bonus_ui,
+                            info['price'], quantite_lot, 
+                            config_selected['salaire_bat'],
+                            config_selected['niv_bat']
+                        )
+                        
+                        results.append({
+                            "ID": obj_id,
+                            "Qualité": qualite,
+                            "Saturation": f"{sat:.1%}",
+                            "Achat": f"${info['price']:.0f}",
+                            "Vente Optimal": f"${prix_vente_opt:.0f}",
+                            "Profit/h": f"${profit_h:.2f}"
+                        })
+                
+                if results:
+                    st.dataframe(pd.DataFrame(results), use_container_width=True)
+        else:
+            st.warning("⚠️ Aucun bâtiment sélectionné dans la configuration du scanner")
     
     with tab3:
         st.header("ℹ️ À Propos")
