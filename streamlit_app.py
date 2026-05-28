@@ -762,103 +762,53 @@ def main():
         st.markdown(f"**Produit choisi :** {item_name}")
 
         if st.button("Analyser les réductions (1%→5%)", key="contract_analyse"):
-            with st.spinner("Calcul des profits pour différentes réductions..."):
-                # Gather market offers for the selected item
-                offres_item = get_best_offers_by_quality(item_id)
-                # Determine best competitor profit in the same building
-                best_competitor_profit = -float('inf')
-                best_competitor_name = None
-                for other_id in item_ids:
-                    if other_id == item_id:
-                        continue
-                    offres_other = get_best_offers_by_quality(other_id)
-                    for q, info in offres_other.items():
-                        prix_market = info['price'] if isinstance(info, dict) else info
-                        try:
-                            prix_vente_opt, profit_h, _ = trouver_profit_maximum(
-                                str(other_id), data['phase_1'][str(other_id)], q,
-                                get_all_saturations().get(str(other_id), 0.5), bonus_ui,
-                                prix_market, 1,
-                                st.session_state.custom_config[batiment_contract]['salaire_bat'],
-                                st.session_state.custom_config[batiment_contract]['niv_bat']
-                            )
-                        except Exception:
-                            continue
-                        if profit_h > best_competitor_profit:
-                            best_competitor_profit = profit_h
-                            best_competitor_name = get_item_name(other_id, data)
-
-                if best_competitor_name:
-                    st.markdown(f"**Meilleur profit concurrent dans {batiment_contract} :** {best_competitor_name} — ${best_competitor_profit:.2f}/h")
-                else:
-                    st.info("Aucun concurrent trouvé pour le bâtiment sélectionné.")
-
-                # Build results table for the selected item across qualities and reductions
-                rows = []
-                reductions = [1,2,3,4,5]
-                for q, info in offres_item.items():
-                    prix_market = info['price'] if isinstance(info, dict) else info
+            with st.spinner("
+                # 1. Scan de tous les items du bâtiment pour trouver LE meilleur profit du marché
+                best_market_profit = 0.0
+                best_market_item = "Aucun"
+                
+                for b_item_id in item_ids:
+                    if str(b_item_id) not in data["phase_1"]: continue
+                    b_stats = data["phase_1"][str(b_item_id)]
+                    b_sat = saturations.get(str(b_item_id), 0.5)
+                    b_offres = get_best_offers_by_quality(b_item_id)
                     
-                    # Calcul pour le prix du marché normal (0% réduction)
-                    try:
-                        prix_vente_opt_base, profit_h_base, _ = trouver_profit_maximum(
-                            str(item_id), data['phase_1'][str(item_id)], q,
-                            get_all_saturations().get(str(item_id), 0.5), bonus_ui,
-                            prix_market, 1,
-                            st.session_state.custom_config[batiment_contract]['salaire_bat'],
-                            st.session_state.custom_config[batiment_contract]['niv_bat']
+                    for b_q, b_info in b_offres.items():
+                        b_prix = b_info['price'] if isinstance(b_info, dict) else b_info
+                        _, b_prof, _ = trouver_profit_maximum(
+                            str(b_item_id), b_stats, b_q, b_sat, bonus_ui,
+                            b_prix, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                         )
-                        marge_base = ((prix_vente_opt_base - prix_market) / prix_market * 100) if prix_market > 0 else 0
-                    except Exception:
-                        profit_h_base = 0
-                        marge_base = 0
+                        if b_prof > best_market_profit:
+                            best_market_profit = b_prof
+                            best_market_item = f"{get_item_name(b_item_id, data)} (Q{b_q})"
+                            
+                if best_market_profit > 0:
+                    st.success(f"🏆 Meilleure opportunité actuelle (Marché) : **{best_market_item}** à **${best_market_profit:.2f}/h**")
+                else:
+                    st.warning("⚠️ Aucune offre rentable trouvée sur le marché pour ce bâtiment.")
 
-                    row = {
-                        'Qualité': f"Q{q}",
-                        'Prix marché ($)': f"{prix_market:.2f}",
-                        'Profit/h marché ($)': f"{profit_h_base:.2f}",
-                        'Marge marché (%)': f"{marge_base:.1f}%",
-                        'Meilleur profit concurrent ($/h)': f"{best_competitor_profit:.2f}" if best_competitor_profit > -1e8 else 'N/A'
-                    }
-                    for pct in reductions:
-                        reduced_price = prix_market * (1 - pct/100.0)
-                        try:
-                            prix_vente_opt, profit_h_red, _ = trouver_profit_maximum(
-                                str(item_id), data['phase_1'][str(item_id)], q,
-                                get_all_saturations().get(str(item_id), 0.5), bonus_ui,
-                                reduced_price, 1,
-                                st.session_state.custom_config[batiment_contract]['salaire_bat'],
-                                st.session_state.custom_config[batiment_contract]['niv_bat']
-                            )
-                            margin_pct = ((prix_vente_opt - reduced_price) / reduced_price) * 100 if reduced_price > 0 else 0
-                        except Exception:
-                            profit_h_red = None
-                            margin_pct = None
-                        if best_competitor_profit == -float('inf') or best_competitor_profit == 0 or profit_h_red is None:
-                            profit_vs_best = None
-                        else:
-                            profit_vs_best = (profit_h_red - best_competitor_profit) / abs(best_competitor_profit) * 100
-                        row[f"Prix @ -{pct}%"] = f"{reduced_price:.2f}"
-                        row[f"Profit/h @ -{pct}%"] = f"{profit_h_red:.2f}" if profit_h_red is not None else 'N/A'
-                        row[f"Marge @ -{pct}%"] = f"{margin_pct:.1f}%" if margin_pct is not None else 'N/A'
-                        row[f"Vs concurrent @ -{pct}%"] = f"{profit_vs_best:.2f}%" if profit_vs_best is not None else 'N/A'
-                    rows.append(row)
+                # 2. Récupérer les offres pour l'item sélectionné dans le contrat
+                offres_item = get_best_offers_by_quality(item_id)
 
+                # 3. Construire le tableau de résultats
+                rows = []
+                rem_stats = data['phase_1'].get(str(item_id))
+                ite( i _sat, bonus_ui,
+                                    reduced_price, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
+                                )
+                                # Comparaison avec LE MEILLEUR PROFIT DU MARCHÉ GLOBAL
+                                if best_market_profit > 0 and profit_h_red is not None:
+                                    profit_vs_marche = ((profit_h_red - best_market_profit) / abs(best_market_profit)) * 100
+                                else:
+                                    profit_vs_marche = None
+                            except Exception:
+                            profit_vs_marche is not None else 'N/A'
+                     rows.ap
                 if rows:
                     df = pd.DataFrame(rows)
-                    # Prepare HTML with colored percent cells for better compatibility
-                    highlight_cols = [col for col in df.columns if col.startswith('Vs concurrent @') or col.startswith('Marge')]
-                    df_html = df.copy()
-                    for col in highlight_cols:
-                        def fmt(val):
-                            if val is None or (isinstance(val, float) and pd.isna(val)):
-                                return 'N/A'
-                            # Handle strings like '12.34%'
-                            if isinstance(val, str):
-                                s = val.strip()
-                                if s == '' or s.upper() == 'N/A':
-                                    return 'N/A'
-                                if s.endswith('%'):
+                    # Prépara
+                            if val is No.endswith('%'):
                                     s_num = s[:-1].replace(',', '.')
                                     try:
                                         v = float(s_num)
@@ -888,8 +838,6 @@ def main():
     with tab_settings:
         st.header("⚙️ Paramètres Globaux")
         st.markdown("Définissez ici le niveau et le salaire pour chaque bâtiment. Ces valeurs s'appliqueront dans le Scanner et les Contrats.")
-        
-        st.session_state.bonus_ui = st.number_input("Bonus UI (Vitesse)", min_value=1.0, max_value=2.0, value=st.session_state.bonus_ui, step=0.01)
         
         st.subheader("Configuration des Bâtiments")
         cols = st.columns(3)
