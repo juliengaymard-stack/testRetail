@@ -38,19 +38,34 @@ def inject_custom_css():
 
 CONFIG_BATIMENTS = {
     "Groceries Store": {
-        "niv_bat": 5,
-        "salaire_bat": 755,
-        "ids": ["3", "4", "5", "8", "9", "119", "122", "123", "124", "125", "126", "127"]
+        "niv_bat": 1,
+        "salaire_bat": 152,
+        "ids": ["3", "4", "5", "7", "8", "9", "119", "122", "123", "124", "125", "126", "127", "140", "152"]
+    },
+    "Gas Station": {
+        "niv_bat": 1,
+        "salaire_bat": 380,
+        "ids": ["11", "12"]
+    },
+    "Electronics Store": {
+        "niv_bat": 1,
+        "salaire_bat": 190,
+        "ids": ["24", "25", "26", "27", "28", "98"]
+    },
+    "Car Dealership": {
+        "niv_bat": 1,
+        "salaire_bat": 417,
+        "ids": ["53", "54", "55", "56", "57"]
     },
     "Fashion Store": {
-        "niv_bat": 2,
-        "salaire_bat": 679,
-        "ids": ["60", "61", "62", "63", "64", "65"]
+        "niv_bat": 1,
+        "salaire_bat": 342,
+        "ids": ["60", "61", "62", "63", "64", "65", "70", "71"]
     },
-    "Car Retail Store": {
-        "niv_bat": 3,
-        "salaire_bat": 1246,
-        "ids": ["53", "54", "55", "56", "57"]
+    "Hardware Store": {
+        "niv_bat": 1,
+        "salaire_bat": 190,
+        "ids": ["102", "103", "108", "109", "110"]
     }
 }
 
@@ -69,7 +84,10 @@ def calculer_resistance_prix(resistivite, prix_ref, prix_vente, salaire, cout_pr
     return resistivite - (prix_vente - prix_ref)**2 * elasticite_prix
 
 def calculer_temps_vente_secondes(velocite, cout_prod, salaire, prix, multiplicateur_bonus):
-    return (multiplicateur_bonus * ((prix - cout_prod) * 3600) - salaire) / (velocite + salaire)
+    denominateur = velocite + salaire
+    if denominateur <= 0:
+        return -1
+    return (multiplicateur_bonus * ((prix - cout_prod) * 3600) - salaire) / denominateur
 
 def calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix, quantite, niveau_bat):
     multiplicateur_bonus = 1 / bonus_ui 
@@ -97,11 +115,31 @@ def calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix, qua
     
     temps_sec = calculer_temps_vente_secondes(velocite, cout_prod, salaire, prix, multiplicateur_bonus)
     
+    if temps_sec <= 0:
+        return -1
     return (temps_sec * quantite) / niveau_bat
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def trouver_profit_maximum(id_obj, stats, qualite, saturation, bonus_ui, prix_achat, quantite, salaire_horaire_batiment, niv_batiment):
+    # 1. Calcul de la limite mathématique absolue (Asymptote du temps de vente infini)
+    Uor = 370
+    facteur_sat = min(max(2 - saturation, 0), 2)
+    volume_min = max(0.9, facteur_sat / 2 + 0.5)
+    L = stats["buildingLevelsNeededPerUnitPerHour"]
+    Um = stats["modeledUnitsSoldAnHour"]
+    k_val = 2.28 if str(id_obj) == "B" else 1
+    resistivite = Uor * (L * Um + 1) * k_val * (facteur_sat / 2 * (1 + (qualite / 12) * 0.3))
+    capacite_vente = Um * volume_min
+    salaire = stats.get("modeledStoreWages", 0)
+    cout_prod = stats["modeledProductionCostPerUnit"]
+    
+    prix_ref = cout_prod + (resistivite + salaire) / capacite_vente
+    prix_max_theorique = 2 * prix_ref - cout_prod
+    
+    if prix_achat >= prix_max_theorique - 0.02:
+        return float(prix_achat), 0.0, {"temps_vente": 0.0, "profit_net_total": 0.0}
+
     def objective(prix_test):
         temps_sec = calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix_test, quantite, niv_batiment)
         
@@ -116,8 +154,8 @@ def trouver_profit_maximum(id_obj, stats, qualite, saturation, bonus_ui, prix_ac
     try:
         res = minimize_scalar(
             objective, 
-            bracket=(prix_achat + 1, prix_achat + 1000), 
-            method='brent'
+            bounds=(prix_achat + 0.01, prix_max_theorique - 0.01), 
+            method='bounded'
         )
         # CRITIQUE : Conversion forcée en float natif Python. SciPy renvoie des numpy.float64
         # qui provoquent un crash silencieux (Erreur 500) dans le cache de Streamlit !
@@ -127,6 +165,9 @@ def trouver_profit_maximum(id_obj, stats, qualite, saturation, bonus_ui, prix_ac
         return float(prix_achat), 0.0, {"temps_vente": 0.0, "profit_net_total": 0.0}
     
     temps_sec = calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix_optimal, quantite, niv_batiment)
+    if temps_sec <= 0:
+        return float(prix_achat), 0.0, {"temps_vente": 0.0, "profit_net_total": 0.0}
+        
     profit_net = ((prix_optimal - prix_achat) * quantite) - (salaire_horaire_batiment * (temps_sec/3600))
     
     return prix_optimal, profit_max, {
