@@ -305,8 +305,12 @@ def get_best_offers_by_quality(id_obj):
             for order in orders:
                 q = order.get("quality", 0)
                 p = order.get("price", 0)
-                if p > 0 and (q not in best_prices or p < best_prices[q]["price"]):
-                    best_prices[q] = {"price": p}
+                qty = order.get("quantity", 0)
+                if p > 0:
+                    if q not in best_prices or p < best_prices[q]["price"]:
+                        best_prices[q] = {"price": p, "quantity": qty}
+                    elif p == best_prices[q]["price"]:
+                        best_prices[q]["quantity"] += qty
             return best_prices
         except Exception:
             time.sleep(0.1)
@@ -536,7 +540,7 @@ def main():
 
                 for qualite, prix_info in meilleures_offres.items():
                     prix_achat = prix_info['price']
-                    stock = prix_info['quantity']
+                    stock = prix_info.get('quantity', 0)
                     
                     prix_vente_opt, profit_h, stats_opt = trouver_profit_maximum(
                         str(obj_id), stats, qualite, sat_reelle, bonus_ui, 
