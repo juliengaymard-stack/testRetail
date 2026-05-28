@@ -762,7 +762,9 @@ def main():
         st.markdown(f"**Produit choisi :** {item_name}")
 
         if st.button("Analyser les réductions (1%→5%)", key="contract_analyse"):
-            with st.spinner("
+            with st.spinner("Analyse globale du marché et calcul des réductions..."):
+                saturations = get_all_saturations()
+                
                 # 1. Scan de tous les items du bâtiment pour trouver LE meilleur profit du marché
                 best_market_profit = 0.0
                 best_market_item = "Aucun"
@@ -793,8 +795,32 @@ def main():
 
                 # 3. Construire le tableau de résultats
                 rows = []
-                rem_stats = data['phase_1'].get(str(item_id))
-                ite( i _sat, bonus_ui,
+                reductions = [1, 2, 3, 4, 5]
+                item_stats = data['phase_1'].get(str(item_id))
+                item_sat = saturations.get(str(item_id), 0.5)
+                
+                if item_stats:
+                    for q, info in offres_item.items():
+                        prix_market = info['price'] if isinstance(info, dict) else info
+                        
+                        try:
+                            _, profit_h_base, _ = trouver_profit_maximum(
+                                str(item_id), item_stats, q, item_sat, bonus_ui,
+                                prix_market, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
+                            )
+                        except Exception:
+                            profit_h_base = 0
+
+                        row = {
+                            'Qualité': f"Q{q}",
+                            'Prix marché ($)': f"{prix_market:.2f}",
+                            'Profit/h marché ($)': f"{profit_h_base:.2f}"
+                        }
+                        for pct in reductions:
+                            reduced_price = prix_market * (1 - pct/100.0)
+                            try:
+                                _, profit_h_red, _ = trouver_profit_maximum(
+                                    str(item_id), item_stats, q, item_sat, bonus_ui,
                                     reduced_price, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                                 )
                                 # Comparaison avec LE MEILLEUR PROFIT DU MARCHÉ GLOBAL
@@ -803,12 +829,29 @@ def main():
                                 else:
                                     profit_vs_marche = None
                             except Exception:
-                            profit_vs_marche is not None else 'N/A'
-                     rows.ap
+                                profit_h_red = None
+                                profit_vs_marche = None
+                                
+                            row[f"Prix @ -{pct}%"] = f"{reduced_price:.2f}"
+                            row[f"Profit/h @ -{pct}%"] = f"{profit_h_red:.2f}" if profit_h_red is not None else 'N/A'
+                            row[f"Vs Meilleur Marché @ -{pct}%"] = f"{profit_vs_marche:.2f}%" if profit_vs_marche is not None else 'N/A'
+                        rows.append(row)
+
                 if rows:
                     df = pd.DataFrame(rows)
-                    # Prépara
-                            if val is No.endswith('%'):
+                    # Préparation HTML pour la coloration
+                    highlight_cols = [col for col in df.columns if col.startswith('Vs Meilleur Marché @')]
+                    df_html = df.copy()
+                    for col in highlight_cols:
+                        def fmt(val):
+                            if val is None or (isinstance(val, float) and pd.isna(val)):
+                                return 'N/A'
+                            # Handle strings like '12.34%'
+                            if isinstance(val, str):
+                                s = val.strip()
+                                if s == '' or s.upper() == 'N/A':
+                                    return 'N/A'
+                                if s.endswith('%'):
                                     s_num = s[:-1].replace(',', '.')
                                     try:
                                         v = float(s_num)
