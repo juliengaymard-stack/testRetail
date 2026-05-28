@@ -537,7 +537,8 @@ def main():
 
                 # --- OPTIMISATION VITESSE : PRÉ-CHARGEMENT DU CACHE ---
                 all_unique_ids = list({obj_id for nom in batiments_selectionnes for obj_id in CONFIG_BATIMENTS[nom]["ids"]})
-                
+                total_ids = sum(len(CONFIG_BATIMENTS[nom]["ids"]) for nom in batiments_selectionnes)
+
                 msg_cache = st.info("⚡ Pré-chargement des prix du marché...")
                 cache_progress = st.progress(0)
                 for i, uid in enumerate(all_unique_ids):
