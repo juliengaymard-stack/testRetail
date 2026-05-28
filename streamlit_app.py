@@ -38,7 +38,7 @@ def inject_custom_css():
 
 CONFIG_BATIMENTS = {
     "Groceries Store": {
-        "niv_bat": 1,
+        "niv_bat": 5,
         "salaire_bat": 152,
         "ids": ["3", "4", "5", "7", "8", "9", "119", "122", "123", "124", "125", "126", "127", "140", "152"]
     },
@@ -53,19 +53,20 @@ CONFIG_BATIMENTS = {
         "ids": ["24", "25", "26", "27", "28", "98"]
     },
     "Car Dealership": {
-        "niv_bat": 1,
-        "salaire_bat": 417,
+        "niv_bat": 3,
+        "salaire_bat": 1266,
         "ids": ["53", "54", "55", "56", "57"]
     },
     "Fashion Store": {
-        "niv_bat": 1,
-        "salaire_bat": 342,
+        "niv_bat": 3,
+        "salaire_bat": 1036,
         "ids": ["60", "61", "62", "63", "64", "65", "70", "71"]
     },
     "Hardware Store": {
         "niv_bat": 1,
         "salaire_bat": 190,
         "ids": ["102", "103", "108", "109", "110"]
+
     }
 }
 
@@ -501,7 +502,6 @@ def main():
     st.title("📊 SimCompanies Market Scanner")
 
     # App-level configuration
-    bonus_ui = 1.02
     quantite_lot = 1
 
     # Initialiser les paramètres modifiables en session state si nécessaire
@@ -509,6 +509,8 @@ def main():
         st.session_state.custom_config = {name: config.copy() for name, config in CONFIG_BATIMENTS.items()}
     if "market_cache" not in st.session_state:
         st.session_state.market_cache = {}
+    if "bonus_ui" not in st.session_state:
+        st.session_state.bonus_ui = 1.02
 
     # Prépare la liste des bâtiments disponibles et sélection actuelle (sera modifiée dans l'onglet Scan)
     batiments_disponibles = list(CONFIG_BATIMENTS.keys())
@@ -528,10 +530,11 @@ def main():
     # Onglets
     saturation_api_data = fetch_saturation_data()
     history = load_saturation_history()
-    tab_scan, tab_sat, tab_contrats, tab_about = st.tabs([
+    tab_scan, tab_sat, tab_contrats, tab_settings, tab_about = st.tabs([
         "🚀 Scanner",
         "📉 Saturation",
         "🤝 Contrats",
+        "⚙️ Paramètres",
         "ℹ️ À Propos"
     ])
 
@@ -542,17 +545,11 @@ def main():
         nom_batiment = st.selectbox("🏬 Choisir un bâtiment", batiments_disponibles)
         config_actuelle = st.session_state.custom_config[nom_batiment]
 
-        # Paramètres dynamiques
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            niv = st.number_input("Niveau du bâtiment", min_value=1, value=config_actuelle["niv_bat"])
-        with col2:
-            sal = st.number_input("Salaire horaire ($)", min_value=0, value=config_actuelle["salaire_bat"])
-        with col3:
-            bonus_ui = st.number_input("Bonus UI (Vitesse)", min_value=1.0, max_value=2.0, value=bonus_ui, step=0.01)
+        niv = config_actuelle["niv_bat"]
+        sal = config_actuelle["salaire_bat"]
+        bonus_ui = st.session_state.bonus_ui
 
-        st.session_state.custom_config[nom_batiment]["niv_bat"] = niv
-        st.session_state.custom_config[nom_batiment]["salaire_bat"] = sal
+        st.info(f"**Configuration active :** Niveau {niv} | Salaire {sal}$/h | Bonus UI {bonus_ui}")
 
         col_btn, _ = st.columns([1, 3])
         with col_btn:
@@ -746,6 +743,10 @@ def main():
         st.header("🤝 Négociation de contrats")
         batiment_contract = st.selectbox("Bâtiment pour négocier", batiments_disponibles, key="contract_building")
 
+        config_actuelle = st.session_state.custom_config[batiment_contract]
+        bonus_ui = st.session_state.bonus_ui
+        st.info(f"**Configuration active :** Niveau {config_actuelle['niv_bat']} | Salaire {config_actuelle['salaire_bat']}$/h")
+
         # Build item name list for selection
         item_ids = CONFIG_BATIMENTS[batiment_contract]["ids"]
         id_to_name = {str(i): get_item_name(i, data) for i in item_ids}
@@ -846,7 +847,7 @@ def main():
                 if rows:
                     df = pd.DataFrame(rows)
                     # Prepare HTML with colored percent cells for better compatibility
-                    highlight_cols = [col for col in df.columns if col.startswith('Vs concurrent @')]
+                    highlight_cols = [col for col in df.columns if col.startswith('Vs concurrent @') or col.startswith('Marge')]
                     df_html = df.copy()
                     for col in highlight_cols:
                         def fmt(val):
@@ -879,10 +880,30 @@ def main():
 
                         df_html[col] = df[col].apply(fmt)
 
-                        html = df_html.to_html(index=False, escape=False)
-                        st.markdown(html, unsafe_allow_html=True)
+                    html = df_html.to_html(index=False, escape=False)
+                    st.markdown(html, unsafe_allow_html=True)
                 else:
                     st.warning("Aucune offre de marché disponible pour ce produit.")
+
+    with tab_settings:
+        st.header("⚙️ Paramètres Globaux")
+        st.markdown("Définissez ici le niveau et le salaire pour chaque bâtiment. Ces valeurs s'appliqueront dans le Scanner et les Contrats.")
+        
+        st.session_state.bonus_ui = st.number_input("Bonus UI (Vitesse)", min_value=1.0, max_value=2.0, value=st.session_state.bonus_ui, step=0.01)
+        
+        st.subheader("Configuration des Bâtiments")
+        cols = st.columns(3)
+        for i, nom_bat in enumerate(batiments_disponibles):
+            with cols[i % 3]:
+                st.markdown(f"**{nom_bat}**")
+                config_act = st.session_state.custom_config[nom_bat]
+                
+                niv_input = st.number_input("Niveau", min_value=1, value=config_act["niv_bat"], key=f"niv_{nom_bat}")
+                sal_input = st.number_input("Salaire/h ($)", min_value=0, value=config_act["salaire_bat"], key=f"sal_{nom_bat}")
+                
+                st.session_state.custom_config[nom_bat]["niv_bat"] = niv_input
+                st.session_state.custom_config[nom_bat]["salaire_bat"] = sal_input
+                st.divider()
 
     with tab_about:
         st.header("ℹ️ À Propos")
