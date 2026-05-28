@@ -330,16 +330,20 @@ def get_saturation_trends(history, top_n=20, eligible_ids=None):
 def get_best_offers_by_quality(id_obj):
     """Récupère les offres du marché avec un cache global pour éviter les doublons."""
     url = f"https://www.simcompanies.com/api/v3/market/0/{id_obj}/"
-    for attempt in range(4):
+    for attempt in range(5):
         try:
             # Réduction du timeout pour éviter que le reverse-proxy du Cloud ne lance une erreur 500
             response = requests.get(url, timeout=5)
             if response.status_code == 429:
-                time.sleep(1) 
+                time.sleep((2 ** attempt) + 1) 
                 continue
             if response.status_code != 200:
                 time.sleep(0.5)
                 continue
+            
+            # Délai de courtoisie après un succès pour ne pas saturer l'API
+            time.sleep(0.15)
+            
             data = response.json()
             orders = data.get("sellOrders", []) if isinstance(data, dict) else data
             
@@ -494,7 +498,37 @@ def format_temps(s):
 
 
 # =====================================================================
-# 5. INTERFACE STREAMLIT
+# 5. GESTION DES PROFILS UTILISATEURS
+# =====================================================================
+USERS_FILE = Path(__file__).resolve().parent / 'users_config.json'
+
+def load_users():
+    default_buildings = {b: {"niv_bat": c["niv_bat"], "salaire_bat": c["salaire_bat"]} for b, c in CONFIG_BATIMENTS.items()}
+    default_profile = {"bonus_ui": 1.02, "buildings": default_buildings}
+    users_data = {"Ju": json.loads(json.dumps(default_profile)), "Théo": json.loads(json.dumps(default_profile))}
+    
+    if USERS_FILE.exists():
+        try:
+            with open(USERS_FILE, 'r', encoding='utf-8') as f:
+                saved_data = json.load(f)
+                for user in ["Ju", "Théo"]:
+                    if user in saved_data:
+                        users_data[user]["bonus_ui"] = saved_data[user].get("bonus_ui", 1.02)
+                        for b in CONFIG_BATIMENTS.keys():
+                            if "buildings" in saved_data[user] and b in saved_data[user]["buildings"]:
+                                users_data[user]["buildings"][b] = saved_data[user]["buildings"][b]
+        except: pass
+    return users_data
+
+def save_users(data):
+    try:
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+    except: pass
+
+
+# =====================================================================
+# 6. INTERFACE STREAMLIT
 # =====================================================================
 
 def main():
@@ -504,13 +538,18 @@ def main():
     # App-level configuration
     quantite_lot = 1
 
-    # Initialiser les paramètres modifiables en session state si nécessaire
-    if "custom_config" not in st.session_state:
-        st.session_state.custom_config = {name: config.copy() for name, config in CONFIG_BATIMENTS.items()}
     if "market_cache" not in st.session_state:
         st.session_state.market_cache = {}
-    if "bonus_ui" not in st.session_state:
-        st.session_state.bonus_ui = 1.02
+
+    users_data = load_users()
+    
+    st.sidebar.title("👤 Profil Utilisateur")
+    current_user = st.sidebar.radio("Connecté en tant que :", ["Ju", "Théo"])
+    
+    if "current_user" not in st.session_state or st.session_state.current_user != current_user:
+        st.session_state.current_user = current_user
+        st.session_state.custom_config = users_data[current_user]["buildings"]
+        st.session_state.bonus_ui = users_data[current_user]["bonus_ui"]
 
     # Prépare la liste des bâtiments disponibles et sélection actuelle (sera modifiée dans l'onglet Scan)
     batiments_disponibles = list(CONFIG_BATIMENTS.keys())
@@ -876,11 +915,53 @@ def main():
                     html = df_html.to_html(index=False, escape=False)
                     st.markdown(html, unsafe_allow_html=True)
                 else:
-                    st.warning("Aucune offre de marché disponible pour ce produit.")
+                    st.warning("Aucune offre de marché disponible pour ce produit (Il n'est pas vendu sur le marché public).")
+
+        # EVALUATION MANUELLE DE CONTRAT (Pour Camions / Vehicules)
+        st.markdown("---")
+        st.subheader("📝 Évaluation Manuelle de Contrat")
+        st.info("Utilisez cet outil pour les véhicules (Camions, Voitures) qui ne sont pas vendus sur le marché public, ou pour tester une offre précise.")
+        
+        col_q, col_p = st.columns(2)
+        with col_q:
+            man_q = st.number_input("Qualité proposée", min_value=0, max_value=12, value=0, step=1)
+        with col_p:
+            man_p = st.number_input("Prix d'achat unitaire ($)", min_value=0.0, value=0.0, step=100.0)
+            
+        if st.button("Calculer la rentabilité de ce contrat"):
+            item_stats = data['phase_1'].get(str(item_id))
+            item_sat = get_all_saturations().get(str(item_id), 0.5)
+            
+            if item_stats and man_p > 0:
+                prix_opt, prof_h, stats_opt = trouver_profit_maximum(
+                    str(item_id), item_stats, man_q, item_sat, bonus_ui,
+                    man_p, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
+                )
+                
+                if prof_h > 0:
+                    st.success("✅ **Contrat Rentable !**")
+                    cm1, cm2, cm3, cm4 = st.columns(4)
+                    cm1.metric("Revente Opt.", f"${prix_opt:.2f}")
+                    cm2.metric("Profit/h", f"${prof_h:.2f}")
+                    cm3.metric("Profit/Jour", f"${(prof_h*24):.2f}")
+                    cm4.metric("Temps de vente", format_temps(stats_opt['temps_vente']))
+                else:
+                    st.error("❌ **Contrat non rentable.** (Le salaire absorbe toute la marge !)")
 
     with tab_settings:
-        st.header("⚙️ Paramètres Globaux")
-        st.markdown("Définissez ici le niveau et le salaire pour chaque bâtiment. Ces valeurs s'appliqueront dans le Scanner et les Contrats.")
+        st.header(f"⚙️ Paramètres de {current_user}")
+        st.markdown("Les modifications sont **sauvegardées automatiquement** sur votre profil.")
+        
+        def on_settings_change():
+            users_data[current_user]["bonus_ui"] = st.session_state.input_bonus
+            for nom_bat in batiments_disponibles:
+                users_data[current_user]["buildings"][nom_bat]["niv_bat"] = st.session_state[f"input_niv_{nom_bat}"]
+                users_data[current_user]["buildings"][nom_bat]["salaire_bat"] = st.session_state[f"input_sal_{nom_bat}"]
+            save_users(users_data)
+            st.session_state.custom_config = users_data[current_user]["buildings"]
+            st.session_state.bonus_ui = users_data[current_user]["bonus_ui"]
+
+        st.number_input("Bonus UI (Vitesse)", min_value=1.0, max_value=2.0, value=st.session_state.bonus_ui, step=0.01, key="input_bonus", on_change=on_settings_change)
         
         st.subheader("Configuration des Bâtiments")
         cols = st.columns(3)
@@ -889,11 +970,8 @@ def main():
                 st.markdown(f"**{nom_bat}**")
                 config_act = st.session_state.custom_config[nom_bat]
                 
-                niv_input = st.number_input("Niveau", min_value=1, value=config_act["niv_bat"], key=f"niv_{nom_bat}")
-                sal_input = st.number_input("Salaire/h ($)", min_value=0, value=config_act["salaire_bat"], key=f"sal_{nom_bat}")
-                
-                st.session_state.custom_config[nom_bat]["niv_bat"] = niv_input
-                st.session_state.custom_config[nom_bat]["salaire_bat"] = sal_input
+                st.number_input("Niveau", min_value=1, value=config_act["niv_bat"], key=f"input_niv_{nom_bat}", on_change=on_settings_change)
+                st.number_input("Salaire/h ($)", min_value=0, value=config_act["salaire_bat"], key=f"input_sal_{nom_bat}", on_change=on_settings_change)
                 st.divider()
 
     with tab_about:
