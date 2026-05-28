@@ -1,0 +1,16 @@
+2026-05-28 11:42:48.974 "client.showWarningOnDirectExecution" is not a valid config option. If you previously had this config option set, it may have been removed.
+2026-05-28 11:42:49.011 No ASGI app assignments found in C:\Users\julie\Desktop\SimCompanies\streamlit_app.py
+2026-05-28 11:42:49.217 Filtered 52 packages down to 1 candidates for component scanning
+2026-05-28 11:42:49.233 Scanning 1 candidate packages for component manifests using 1 worker threads
+2026-05-28 11:42:49.249 Found 0 component manifests total
+2026-05-28 11:42:49.249 No asset roots to watch
+2026-05-28 11:42:49.249 File watching not started
+2026-05-28 11:42:49.249 Starting new event loop for server
+2026-05-28 11:42:49.249 Starting server...
+2026-05-28 11:42:49.295 Starting uvicorn server on 0.0.0.0:8501
+2026-05-28 11:42:49.353 Runtime state: RuntimeState.INITIAL -> RuntimeState.NO_SESSIONS_CONNECTED
+2026-05-28 11:42:49.353 Uvicorn server started on 0.0.0.0:8501
+2026-05-28 11:42:49.400 Setting up signal handler
+2026-05-28 11:43:02.628 Runtime stopping...
+2026-05-28 11:43:02.628 Runtime state: RuntimeState.NO_SESSIONS_CONNECTED -> RuntimeState.STOPPING
+2026-05-28 11:43:02.628 Runtime state: RuntimeState.STOPPING -> RuntimeState.STOPPED

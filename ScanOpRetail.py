@@ -122,10 +122,10 @@ def get_best_offers_by_quality(id_obj):
         try:
             res = requests.get(url, headers=HEADERS, timeout=10)
             if res.status_code == 429:
-                time.sleep((2 ** attempt) * 5 + random.uniform(1, 3))
+                time.sleep((2 ** attempt) * 1 + 0.5)
                 continue
             if res.status_code != 200:
-                time.sleep(2)
+                time.sleep(0.2)
                 continue
             
             offres = res.json()
@@ -138,7 +138,7 @@ def get_best_offers_by_quality(id_obj):
                     best_prices[q] = p
             return best_prices
         except:
-            time.sleep(2)
+            time.sleep(0.1)
     return {}
 
 
@@ -198,7 +198,7 @@ def optimiser_allocation_budget(budget_total, heures_cibles):
             
             if obj_id not in cache_offres:
                 cache_offres[obj_id] = get_best_offers_by_quality(obj_id)
-                time.sleep(random.uniform(1.0, 2.0))
+                time.sleep(0.1)
             
             offres = cache_offres[obj_id]
             

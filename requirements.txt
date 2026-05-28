@@ -1,4 +1,10 @@
-streamlit>=1.40.0
-pandas>=2.2.0
-requests>=2.32.0
-scipy>=1.14.0
+streamlit
+pandas>=2.0.0
+pyarrow>=14.0.1
+requests
+scipy
+altair
+protobuf<7,>=3.20
+tenacity<10,>=8.1.0
+toml<2,>=0.10.1
+pandas-stubs
