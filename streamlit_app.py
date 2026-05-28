@@ -483,170 +483,99 @@ def main():
     # Onglets
     saturation_api_data = fetch_saturation_data()
     history = load_saturation_history()
-    tab1, tab3, tab4, tab5, tab6 = st.tabs([
+    tab_scan, tab_sat, tab_contrats, tab_about = st.tabs([
         "🚀 Scanner",
         "📉 Saturation",
-        "💼 Directeur financier",
         "🤝 Contrats",
         "ℹ️ À Propos"
     ])
 
-    with tab1:
-        st.header("Lancement du Scan")
+    with tab_scan:
+        st.header("Analyse du Bâtiment")
 
-        st.subheader("Paramètres de scan")
-        bonus_ui = st.number_input(
-            "Bonus UI (vitesse de vente)",
-            min_value=1.0,
-            max_value=2.0,
-            value=bonus_ui,
-            step=0.01,
-            key="bonus_ui_main"
-        )
+        # Sélection du bâtiment unique pour l'analyse
+        nom_batiment = st.selectbox("🏬 Choisir un bâtiment", batiments_disponibles)
+        config_actuelle = st.session_state.custom_config[nom_batiment]
 
-        # Sélection et édition des bâtiments (persistés en session_state)
-        st.subheader("🏬 Bâtiments et paramètres")
-        cols = st.columns(len(batiments_disponibles))
-        for i, nom_batiment in enumerate(batiments_disponibles):
-            with cols[i]:
-                st.markdown(f"**{nom_batiment}**")
-                niv = st.number_input(f"Niveau - {nom_batiment}", min_value=1,
-                                      value=st.session_state.custom_config[nom_batiment]["niv_bat"],
-                                      key=f"niv_{nom_batiment}_main")
-                sal = st.number_input(f"Salaire/h - {nom_batiment}", min_value=0,
-                                       value=st.session_state.custom_config[nom_batiment]["salaire_bat"],
-                                       key=f"sal_{nom_batiment}_main")
-                st.session_state.custom_config[nom_batiment]["niv_bat"] = niv
-                st.session_state.custom_config[nom_batiment]["salaire_bat"] = sal
+        # Paramètres dynamiques
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            niv = st.number_input("Niveau du bâtiment", min_value=1, value=config_actuelle["niv_bat"])
+        with col2:
+            sal = st.number_input("Salaire horaire ($)", min_value=0, value=config_actuelle["salaire_bat"])
+        with col3:
+            bonus_ui = st.number_input("Bonus UI (Vitesse)", min_value=1.0, max_value=2.0, value=bonus_ui, step=0.01)
 
-        batiments_selectionnes = st.multiselect(
-            "🏢 Bâtiments à scanner",
-            batiments_disponibles,
-            default=batiments_selectionnes,
-            key="select_buildings_main"
-        )
+        st.session_state.custom_config[nom_batiment]["niv_bat"] = niv
+        st.session_state.custom_config[nom_batiment]["salaire_bat"] = sal
 
-        # Persister la sélection dans session
-        st.session_state.selected_buildings = batiments_selectionnes
+        col_btn, _ = st.columns([1, 3])
+        with col_btn:
+            if st.button("🔄 Actualiser les prix du marché (Vider Cache)"):
+                st.cache_data.clear()
+                st.rerun()
 
-        if st.button("🔍 LANCER LE SCAN", key="launch_scan", type="primary"):
-            with st.spinner("📥 Téléchargement des données de marché..."):
-                saturations_globales = get_all_saturations()
+        with st.spinner("📥 Chargement et analyse des données..."):
+            saturations_globales = get_all_saturations()
+            save_saturation_snapshot(saturations_globales)
+            
+            ids_to_scan = CONFIG_BATIMENTS[nom_batiment]["ids"]
+            opportunites = []
 
-            if not saturations_globales:
-                st.warning("⚠️ Impossible de récupérer les saturations. Utilisation des valeurs par défaut.")
-                saturations_globales = {k: 0.5 for k in range(1, 200)}
-            else:
-                history = save_saturation_snapshot(saturations_globales)
-
-            # --- OPTIMISATION VITESSE : PRÉ-CHARGEMENT DU CACHE ---
-            all_unique_ids = list({obj_id for nom in batiments_selectionnes for obj_id in CONFIG_BATIMENTS[nom]["ids"]})
-            total_ids = sum(len(CONFIG_BATIMENTS[nom]["ids"]) for nom in batiments_selectionnes)
-
-            msg_cache = st.info("⚡ Pré-chargement des prix du marché...")
-            cache_progress = st.progress(0)
-            for i, uid in enumerate(all_unique_ids):
-                get_best_offers_by_quality(uid)
-                cache_progress.progress((i + 1) / len(all_unique_ids))
-            msg_cache.empty()
-            cache_progress.empty()
-            # -----------------------------------------------------
-
-            top_opportunites_batiments = {}
+            # Pré-chargement / Calcul
             progress_bar = st.progress(0)
-            current_idx = 0
+            for i, obj_id in enumerate(ids_to_scan):
+                progress_bar.progress((i + 1) / len(ids_to_scan))
+                
+                if str(obj_id) not in data["phase_1"]:
+                    continue
 
-            for nom_batiment in batiments_selectionnes:
-                config = st.session_state.custom_config.get(nom_batiment, CONFIG_BATIMENTS[nom_batiment])
-                meilleure_opp_batiment = None
-                profit_max_batiment = -float('inf')
+                stats = data["phase_1"][str(obj_id)]
+                sat_reelle = saturations_globales.get(str(obj_id), 0.5)
+                meilleures_offres = get_best_offers_by_quality(obj_id)
 
-                with st.spinner(f"🏬 Analyse {nom_batiment}..."):
-                    for obj_id in CONFIG_BATIMENTS[nom_batiment]["ids"]:
-                        current_idx += 1
-                        progress_bar.progress(current_idx / total_ids)
+                for qualite, prix_info in meilleures_offres.items():
+                    prix_achat = prix_info['price']
+                    stock = prix_info['quantity']
+                    
+                    prix_vente_opt, profit_h, stats_opt = trouver_profit_maximum(
+                        str(obj_id), stats, qualite, sat_reelle, bonus_ui, 
+                        prix_achat, quantite_lot, sal, niv
+                    )
 
-                        if str(obj_id) not in data["phase_1"]:
-                            continue
+                    if profit_h > 0:
+                        opportunites.append({
+                            "Produit": get_item_name(obj_id, data),
+                            "Qualité": f"Q{qualite}",
+                            "Achat ($)": prix_achat,
+                            "Vente ($)": prix_vente_opt,
+                            "Profit/h ($)": profit_h,
+                            "Profit/Jour ($)": profit_h * 24,
+                            "Temps": stats_opt['temps_vente'],
+                            "Stock dispo": stock
+                        })
+            
+            progress_bar.empty()
 
-                        stats = data["phase_1"][str(obj_id)]
-                        sat_reelle = saturations_globales.get(str(obj_id), 0.5)
-                        # Utilise le cache @st.cache_data directement, c'est plus rapide que de pré-remplir la session
-                        meilleures_offres = get_best_offers_by_quality(obj_id)
+        # Trier et prendre les 10 meilleurs
+        if not opportunites:
+            st.info("Aucune opportunité rentable trouvée avec ces paramètres.")
+        else:
+            opportunites.sort(key=lambda x: x["Profit/h ($)"], reverse=True)
+            top_10 = opportunites[:10]
+            
+            st.subheader(f"🏆 Top 10 Opportunités - {nom_batiment}")
+            
+            df_results = pd.DataFrame(top_10)
+            df_results["Achat ($)"] = df_results["Achat ($)"].map("{:.2f}".format)
+            df_results["Vente ($)"] = df_results["Vente ($)"].map("{:.2f}".format)
+            df_results["Profit/h ($)"] = df_results["Profit/h ($)"].map("{:.2f}".format)
+            df_results["Profit/Jour ($)"] = df_results["Profit/Jour ($)"].map("{:.2f}".format)
+            df_results["Temps"] = df_results["Temps"].apply(format_temps)
+            
+            st.dataframe(df_results, use_container_width=True)
 
-                        if not meilleures_offres:
-                            continue
-
-                        for qualite, prix_info in meilleures_offres.items():
-                            prix_achat = prix_info['price'] if isinstance(prix_info, dict) else prix_info
-                            
-                            prix_vente_opt, profit_h, stats_opt = trouver_profit_maximum(
-                                str(obj_id), stats, qualite, sat_reelle, bonus_ui, 
-                                prix_achat, quantite_lot, config['salaire_bat'], config['niv_bat']
-                            )
-
-                            if profit_h > profit_max_batiment:
-                                profit_max_batiment = profit_h
-                                meilleure_opp_batiment = {
-                                    "id": obj_id,
-                                    "nom_produit": get_item_name(obj_id, data),
-                                    "q": qualite,
-                                    "achat": prix_achat,
-                                    "vente": prix_vente_opt,
-                                    "profit": profit_h,
-                                    "temps": stats_opt['temps_vente']
-                                }
-
-                if meilleure_opp_batiment:
-                    top_opportunites_batiments[nom_batiment] = meilleure_opp_batiment
-
-            st.success("✅ Scan terminé!")
-
-            if not top_opportunites_batiments:
-                st.info("Aucune opportunité rentable trouvée.")
-            else:
-                for nom_bat, res in top_opportunites_batiments.items():
-                    with st.container():
-                        st.subheader(f"🏬 {nom_bat}")
-                        
-                        col1, col2, col3, col4, col5 = st.columns(5)
-                        
-                        with col1:
-                            st.markdown(f"**Produit:** {res['nom_produit']}")
-                        with col2:
-                            st.metric("Qualité", f"Q{res['q']}")
-                        with col3:
-                            st.metric("Achat", f"${res['achat']:.2f}")
-                        with col4:
-                            st.metric("Vente", f"${res['vente']:.2f}")
-                        with col5:
-                            st.metric("Profit/h", f"${res['profit']:.2f}")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("Temps", format_temps(res['temps']))
-                        with col2:
-                            st.metric("Profit (8h)", f"${res['profit'] * 8:.2f}")
-                        
-                        st.divider()
-
-                df_results = pd.DataFrame([
-                    {
-                        "Bâtiment": nom_bat,
-                        "Produit": res['nom_produit'],
-                        "Qualité": f"Q{res['q']}",
-                        "Achat ($)": f"{res['achat']:.2f}",
-                        "Vente ($)": f"{res['vente']:.2f}",
-                        "Profit/h ($)": f"{res['profit']:.2f}",
-                        "Temps": format_temps(res['temps'])
-                    }
-                    for nom_bat, res in top_opportunites_batiments.items()
-                ])
-                st.dataframe(df_results, use_container_width=True)
-
-    # tab2 (Détails) removed by user request
-
-    with tab3:
+    with tab_sat:
         st.header("📉 Suivi de la saturation")
 
         exclusion_defaults = [
@@ -768,41 +697,9 @@ def main():
         else:
             st.warning("Aucune donnée de saturation disponible. Lancez un scan ou vérifiez la connexion API.")
 
-    with tab4:
-        st.header("💼 Directeur financier")
-        budget_total = st.number_input("Budget disponible ($)", min_value=0.0, value=250000.0, step=1000.0, format="%.2f")
-        heures_cibles = st.number_input("Heures à couvrir", min_value=1, max_value=72, value=8)
-
-        if st.button("Calculer le plan financier", key="finance_plan"):
-            with st.spinner("Optimisation de l'allocation du budget..."):
-                plan, cash_restant = compute_director_financier_plan(
-                        budget_total, heures_cibles, st.session_state.get('selected_buildings', batiments_disponibles), data, bonus_ui
-                    )
-
-            if not plan:
-                st.warning("Aucune bonne opportunité détectée pour le budget et le temps sélectionnés.")
-            else:
-                df_plan = pd.DataFrame([
-                    {
-                        "Bâtiment": item['batiment'],
-                        "Produit": item['nom_produit'],
-                        "Qualité": f"Q{item['qualite']}",
-                        "Prix achat": f"{item['prix_achat']:.2f}",
-                        "Prix vente opt": f"{item['prix_vente_opt']:.2f}",
-                        "Quantité": f"{item.get('used_quantite', item['quantite']):.1f}",
-                        "Coût utilisé": f"{item['used_cost']:.2f}",
-                        "Profit attendu": f"{item.get('used_profit', item['profit_total']):.2f}",
-                        "ROCE": f"{item['roce']*100:.2f}%",
-                        "Allocation": f"{item['ratio']*100:.0f}%"
-                    }
-                    for item in plan
-                ])
-                st.metric("Cash restant", f"${cash_restant:.2f}")
-                st.dataframe(df_plan, use_container_width=True)
-
-    with tab5:
+    with tab_contrats:
         st.header("🤝 Négociation de contrats")
-        batiment_contract = st.selectbox("Bâtiment pour négocier", batiments_selectionnes, key="contract_building")
+        batiment_contract = st.selectbox("Bâtiment pour négocier", batiments_disponibles, key="contract_building")
 
         # Build item name list for selection
         item_ids = CONFIG_BATIMENTS[batiment_contract]["ids"]
@@ -855,35 +752,56 @@ def main():
                 reductions = [1,2,3,4,5]
                 for q, info in offres_item.items():
                     prix_market = info['price'] if isinstance(info, dict) else info
+                    
+                    # Calcul pour le prix du marché normal (0% réduction)
+                    try:
+                        prix_vente_opt_base, profit_h_base, _ = trouver_profit_maximum(
+                            str(item_id), data['phase_1'][str(item_id)], q,
+                            get_all_saturations().get(str(item_id), 0.5), bonus_ui,
+                            prix_market, 1,
+                            st.session_state.custom_config[batiment_contract]['salaire_bat'],
+                            st.session_state.custom_config[batiment_contract]['niv_bat']
+                        )
+                        marge_base = ((prix_vente_opt_base - prix_market) / prix_market * 100) if prix_market > 0 else 0
+                    except Exception:
+                        profit_h_base = 0
+                        marge_base = 0
+
                     row = {
                         'Qualité': f"Q{q}",
-                        'Prix marché': f"{prix_market:.2f}",
-                        'Meilleur profit concurrent (h)': f"{best_competitor_profit:.2f}" if best_competitor_profit> -1e8 else 'N/A'
+                        'Prix marché ($)': f"{prix_market:.2f}",
+                        'Profit/h marché ($)': f"{profit_h_base:.2f}",
+                        'Marge marché (%)': f"{marge_base:.1f}%",
+                        'Meilleur profit concurrent ($/h)': f"{best_competitor_profit:.2f}" if best_competitor_profit > -1e8 else 'N/A'
                     }
                     for pct in reductions:
                         reduced_price = prix_market * (1 - pct/100.0)
                         try:
-                            _, profit_h_red, _ = trouver_profit_maximum(
+                            prix_vente_opt, profit_h_red, _ = trouver_profit_maximum(
                                 str(item_id), data['phase_1'][str(item_id)], q,
                                 get_all_saturations().get(str(item_id), 0.5), bonus_ui,
                                 reduced_price, 1,
                                 st.session_state.custom_config[batiment_contract]['salaire_bat'],
                                 st.session_state.custom_config[batiment_contract]['niv_bat']
                             )
+                            margin_pct = ((prix_vente_opt - reduced_price) / reduced_price) * 100 if reduced_price > 0 else 0
                         except Exception:
                             profit_h_red = None
+                            margin_pct = None
                         if best_competitor_profit == -float('inf') or best_competitor_profit == 0 or profit_h_red is None:
                             profit_vs_best = None
                         else:
                             profit_vs_best = (profit_h_red - best_competitor_profit) / abs(best_competitor_profit) * 100
                         row[f"Prix @ -{pct}%"] = f"{reduced_price:.2f}"
-                        row[f"Vs meilleur @ -{pct}%"] = f"{profit_vs_best:.2f}%" if profit_vs_best is not None else 'N/A'
+                        row[f"Profit/h @ -{pct}%"] = f"{profit_h_red:.2f}" if profit_h_red is not None else 'N/A'
+                        row[f"Marge @ -{pct}%"] = f"{margin_pct:.1f}%" if margin_pct is not None else 'N/A'
+                        row[f"Vs concurrent @ -{pct}%"] = f"{profit_vs_best:.2f}%" if profit_vs_best is not None else 'N/A'
                     rows.append(row)
 
                 if rows:
                     df = pd.DataFrame(rows)
                     # Prepare HTML with colored percent cells for better compatibility
-                    highlight_cols = [col for col in df.columns if col.startswith('Vs meilleur @')]
+                    highlight_cols = [col for col in df.columns if col.startswith('Vs concurrent @')]
                     df_html = df.copy()
                     for col in highlight_cols:
                         def fmt(val):
@@ -916,17 +834,12 @@ def main():
 
                         df_html[col] = df[col].apply(fmt)
 
-                        # Ensure numeric price columns are displayed nicely
-                        for c in df_html.columns:
-                            if c.startswith('Prix @ -'):
-                                df_html[c] = df_html[c].astype(float).map('{:.2f}'.format)
-
                         html = df_html.to_html(index=False, escape=False)
                         st.markdown(html, unsafe_allow_html=True)
                 else:
                     st.warning("Aucune offre de marché disponible pour ce produit.")
 
-    with tab6:
+    with tab_about:
         st.header("ℹ️ À Propos")
         st.markdown("""
         ### SimCompanies Market Scanner
