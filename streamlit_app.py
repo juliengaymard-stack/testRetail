@@ -39,7 +39,7 @@ def inject_custom_css():
 CONFIG_BATIMENTS = {
     "Groceries Store": {
         "niv_bat": 5,
-        "salaire_bat": 152,
+        "salaire_bat": 767,
         "ids": ["3", "4", "5", "7", "8", "9", "119", "122", "123", "124", "125", "126", "127", "140", "152"]
     },
     "Gas Station": {
@@ -363,127 +363,8 @@ def get_best_offers_by_quality(id_obj):
     return {}
 
 
-def get_item_name(obj_id, data):
-    return data.get("phase_1", {}).get(str(obj_id), {}).get("name", f"Item {obj_id}")
-
-
-def compute_director_financier_plan(budget_total, heures_cibles, batiments_selectionnes, data, bonus_ui):
-    saturations = get_all_saturations()
-    candidates = []
-
-    for nom_batiment in batiments_selectionnes:
-        config = st.session_state.custom_config[nom_batiment]
-        for obj_id in CONFIG_BATIMENTS[nom_batiment]["ids"]:
-            if str(obj_id) not in data["phase_1"]:
-                continue
-            stats = data["phase_1"][str(obj_id)]
-            sat_reelle = saturations.get(str(obj_id), 0.5)
-            offres = get_best_offers_by_quality(obj_id)
-            for qualite, prix_info in offres.items():
-                try:
-                    q_int = int(qualite)
-                except Exception:
-                    continue
-                # Ne traiter que la qualité 0 comme demandé
-                if q_int != 0:
-                    continue
-                prix_achat = prix_info['price'] if isinstance(prix_info, dict) else prix_info
-                prix_vente_opt, profit_h, stats_opt = trouver_profit_maximum(
-                    str(obj_id), stats, qualite, sat_reelle, bonus_ui,
-                    prix_achat, 1, config['salaire_bat'], config['niv_bat']
-                )
-                if profit_h <= 0 or stats_opt['temps_vente'] <= 0:
-                    continue
-                unites_totales = max(1, (3600 / stats_opt['temps_vente']) * heures_cibles)
-                cost = unites_totales * prix_achat
-                profit_total = profit_h * heures_cibles
-                roce = profit_total / cost if cost > 0 else 0
-                candidates.append({
-                    "batiment": nom_batiment,
-                    "id": obj_id,
-                    "nom_produit": get_item_name(obj_id, data),
-                    "qualite": qualite,
-                    "prix_achat": prix_achat,
-                    "prix_vente_opt": prix_vente_opt,
-                    "profit_total": profit_total,
-                    "cost": cost,
-                    "roce": roce,
-                    "quantite": unites_totales,
-                    "saturation": sat_reelle
-                })
-
-    candidates.sort(key=lambda x: (x['roce'], x['profit_total']), reverse=True)
-    plan = []
-    remaining = budget_total
-    used_batiments = set()
-
-    for opt in candidates:
-        if opt['batiment'] in used_batiments:
-            continue
-        if remaining <= 0:
-            break
-        if opt['cost'] <= remaining:
-            opt['ratio'] = 1.0
-            opt['used_cost'] = opt['cost']
-            opt['used_profit'] = opt['profit_total']
-            plan.append(opt)
-            remaining -= opt['cost']
-            used_batiments.add(opt['batiment'])
-        else:
-            ratio = remaining / opt['cost']
-            if ratio >= 0.1:
-                opt_copy = opt.copy()
-                opt_copy['ratio'] = ratio
-                opt_copy['used_cost'] = remaining
-                opt_copy['used_profit'] = opt['profit_total'] * ratio
-                opt_copy['used_quantite'] = opt['quantite'] * ratio
-                plan.append(opt_copy)
-                remaining = 0
-                used_batiments.add(opt_copy['batiment'])
-            break
-
-    return plan, remaining
-
-
-def build_contract_negotiation_table(data, batiment, ids_selected, bonus_ui):
-    rows = []
-    target_margins = [10, 20, 30, 50]
-    saturations = get_all_saturations()
-
-    for obj_id in ids_selected:
-        if str(obj_id) not in data["phase_1"]:
-            continue
-        stats = data["phase_1"][str(obj_id)]
-        sat = saturations.get(str(obj_id), 0.5)
-        offres = get_best_offers_by_quality(obj_id)
-        for qualite, prix_info in offres.items():
-            try:
-                q_int = int(qualite)
-            except Exception:
-                continue
-            if q_int != 0:
-                continue
-            prix_achat = prix_info['price'] if isinstance(prix_info, dict) else prix_info
-            prix_vente_opt, profit_h, _ = trouver_profit_maximum(
-                str(obj_id), stats, qualite, sat, bonus_ui, prix_achat, 1,
-                st.session_state.custom_config[batiment]['salaire_bat'],
-                st.session_state.custom_config[batiment]['niv_bat']
-            )
-            if prix_vente_opt <= 0:
-                continue
-            row = {
-                "Bâtiment": batiment,
-                "Produit": get_item_name(obj_id, data),
-                "Qualité": f"Q{qualite}",
-                "Prix marché": prix_achat,
-                "Prix vente optimisé": prix_vente_opt,
-                "Marge actuelle (%)": (prix_vente_opt - prix_achat) / prix_achat * 100 if prix_achat > 0 else 0
-            }
-            for pct in target_margins:
-                row[f"Prix max {pct}%"] = prix_vente_opt / (1 + pct / 100)
-            rows.append(row)
-
-    return pd.DataFrame(rows)
+def get_item_name(obj_id, phase_data):
+    return phase_data.get(str(obj_id), {}).get("name", f"Item {obj_id}")
 
 
 # =====================================================================
@@ -546,6 +427,12 @@ def main():
     st.sidebar.title("👤 Profil Utilisateur")
     current_user = st.sidebar.radio("Connecté en tant que :", ["Ju", "Théo"])
     
+    st.sidebar.markdown("---")
+    st.sidebar.title("📈 Cycle Économique")
+    PHASE_MAP = {"Récession": "phase_0", "Normal": "phase_1", "Boom": "phase_2"}
+    phase_name = st.sidebar.selectbox("Phase actuelle", list(PHASE_MAP.keys()), index=1)
+    st.session_state.phase_key = PHASE_MAP[phase_name]
+
     if "current_user" not in st.session_state or st.session_state.current_user != current_user:
         st.session_state.current_user = current_user
         st.session_state.custom_config = users_data[current_user]["buildings"]
@@ -553,17 +440,13 @@ def main():
 
     # Prépare la liste des bâtiments disponibles et sélection actuelle (sera modifiée dans l'onglet Scan)
     batiments_disponibles = list(CONFIG_BATIMENTS.keys())
-    batiments_selectionnes = st.session_state.get("selected_buildings", batiments_disponibles)
-
-    if not batiments_selectionnes:
-        st.warning("⚠️ Sélectionnez au moins un bâtiment à scanner")
-        return
 
     # Charger les données
     data = load_database()
+    phase_data = data.get(st.session_state.phase_key)
 
-    if not data or "phase_1" not in data or not data["phase_1"]:
-        st.error("❌ La base de données est vide ou introuvable (database.json).")
+    if not phase_data:
+        st.error(f"❌ Données pour la phase '{phase_name}' introuvables dans database.json.")
         return
 
     # Onglets
@@ -608,10 +491,10 @@ def main():
             for i, obj_id in enumerate(ids_to_scan):
                 progress_bar.progress((i + 1) / len(ids_to_scan))
                 
-                if str(obj_id) not in data["phase_1"]:
+                if str(obj_id) not in phase_data:
                     continue
 
-                stats = data["phase_1"][str(obj_id)]
+                stats = phase_data[str(obj_id)]
                 sat_reelle = saturations_globales.get(str(obj_id), 0.5)
                 meilleures_offres = get_best_offers_by_quality(obj_id)
 
@@ -626,7 +509,7 @@ def main():
 
                     if profit_h > 0:
                         opportunites.append({
-                            "Produit": get_item_name(obj_id, data),
+                            "Produit": get_item_name(obj_id, phase_data),
                             "Qualité": f"Q{qualite}",
                             "Achat ($)": prix_achat,
                             "Vente ($)": prix_vente_opt,
@@ -672,7 +555,7 @@ def main():
 
         with st.expander("Filtres du classement de saturation"):
             all_names = sorted({
-                get_item_name(item.get('dbLetter'), data)
+                get_item_name(item.get('dbLetter'), phase_data)
                 for item in saturation_api_data
                 if item.get('dbLetter') is not None
             }) if saturation_api_data else []
@@ -694,7 +577,7 @@ def main():
                 dbid = item.get('dbLetter')
                 if dbid is None:
                     continue
-                name = get_item_name(dbid, data)
+                name = get_item_name(dbid, phase_data)
                 if name not in name_to_id:
                     name_to_id[name] = str(dbid)
                     choices.append(name)
@@ -713,17 +596,17 @@ def main():
 
             eligible_ids = {
                 str(obj_id)
-                for batiment in st.session_state.get('selected_buildings', batiments_disponibles)
+                for batiment in batiments_disponibles
                 for obj_id in CONFIG_BATIMENTS.get(batiment, {}).get('ids', [])
             }
             rising, falling = get_api_saturation_trends(saturation_api_data, top_n=20, eligible_ids=eligible_ids)
             if excluded_names:
-                rising = [(item_id, delta) for item_id, delta in rising if get_item_name(item_id, data) not in excluded_names]
-                falling = [(item_id, delta) for item_id, delta in falling if get_item_name(item_id, data) not in excluded_names]
+                rising = [(item_id, delta) for item_id, delta in rising if get_item_name(item_id, phase_data) not in excluded_names]
+                falling = [(item_id, delta) for item_id, delta in falling if get_item_name(item_id, phase_data) not in excluded_names]
             if rising:
                 # map ids to names for readability
-                df_rising = pd.DataFrame([{'Produit': get_item_name(it, data), 'Variation x10': f"{delta * 10:.2f}"} for it, delta in rising])
-                df_falling = pd.DataFrame([{'Produit': get_item_name(it, data), 'Variation x10': f"{delta * 10:.2f}"} for it, delta in falling])
+                df_rising = pd.DataFrame([{'Produit': get_item_name(it, phase_data), 'Variation x10': f"{delta * 10:.2f}"} for it, delta in rising])
+                df_falling = pd.DataFrame([{'Produit': get_item_name(it, phase_data), 'Variation x10': f"{delta * 10:.2f}"} for it, delta in falling])
                 col1, col2 = st.columns(2)
                 with col1:
                     st.subheader("Top saturation en hausse")
@@ -739,7 +622,7 @@ def main():
             choices = []
             for snap in history:
                 for k in snap['saturations'].keys():
-                    name = get_item_name(k, data)
+                    name = get_item_name(k, phase_data)
                     if name not in name_to_id:
                         name_to_id[name] = str(k)
                         choices.append(name)
@@ -758,16 +641,16 @@ def main():
 
             eligible_ids = {
                 str(obj_id)
-                for batiment in st.session_state.get('selected_buildings', batiments_disponibles)
+                for batiment in batiments_disponibles
                 for obj_id in CONFIG_BATIMENTS.get(batiment, {}).get('ids', [])
             }
             rising, falling = get_saturation_trends(history, top_n=20, eligible_ids=eligible_ids)
             if excluded_names:
-                rising = [(item_id, delta) for item_id, delta in rising if get_item_name(item_id, data) not in excluded_names]
-                falling = [(item_id, delta) for item_id, delta in falling if get_item_name(item_id, data) not in excluded_names]
+                rising = [(item_id, delta) for item_id, delta in rising if get_item_name(item_id, phase_data) not in excluded_names]
+                falling = [(item_id, delta) for item_id, delta in falling if get_item_name(item_id, phase_data) not in excluded_names]
             if rising:
-                df_rising = pd.DataFrame([{'Produit': get_item_name(item, data), 'Variation x10': f"{delta * 10:.2f}"} for item, delta in rising])
-                df_falling = pd.DataFrame([{'Produit': get_item_name(item, data), 'Variation x10': f"{delta * 10:.2f}"} for item, delta in falling])
+                df_rising = pd.DataFrame([{'Produit': get_item_name(item, phase_data), 'Variation x10': f"{delta * 10:.2f}"} for item, delta in rising])
+                df_falling = pd.DataFrame([{'Produit': get_item_name(item, phase_data), 'Variation x10': f"{delta * 10:.2f}"} for item, delta in falling])
                 col1, col2 = st.columns(2)
                 with col1:
                     st.subheader("Top saturation en hausse")
@@ -788,7 +671,7 @@ def main():
 
         # Build item name list for selection
         item_ids = CONFIG_BATIMENTS[batiment_contract]["ids"]
-        id_to_name = {str(i): get_item_name(i, data) for i in item_ids}
+        id_to_name = {str(i): get_item_name(i, phase_data) for i in item_ids}
         choices = [id_to_name[str(i)] for i in item_ids]
         item_name = st.selectbox("Produit (un à la fois)", choices, key="contract_item")
         item_id = None
@@ -809,20 +692,20 @@ def main():
                 best_market_item = "Aucun"
                 
                 for b_item_id in item_ids:
-                    if str(b_item_id) not in data["phase_1"]: continue
-                    b_stats = data["phase_1"][str(b_item_id)]
+                    if str(b_item_id) not in phase_data: continue
+                    b_stats = phase_data[str(b_item_id)]
                     b_sat = saturations.get(str(b_item_id), 0.5)
                     b_offres = get_best_offers_by_quality(b_item_id)
                     
                     for b_q, b_info in b_offres.items():
                         b_prix = b_info['price'] if isinstance(b_info, dict) else b_info
                         _, b_prof, _ = trouver_profit_maximum(
-                            str(b_item_id), b_stats, b_q, b_sat, bonus_ui,
+                            str(b_item_id), b_stats, b_q, b_sat, st.session_state.bonus_ui,
                             b_prix, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                         )
                         if b_prof > best_market_profit:
                             best_market_profit = b_prof
-                            best_market_item = f"{get_item_name(b_item_id, data)} (Q{b_q})"
+                            best_market_item = f"{get_item_name(b_item_id, phase_data)} (Q{b_q})"
                             
                 if best_market_profit > 0:
                     st.success(f"🏆 Meilleure opportunité actuelle (Marché) : **{best_market_item}** à **${best_market_profit:.2f}/h**")
@@ -835,7 +718,7 @@ def main():
                 # 3. Construire le tableau de résultats
                 rows = []
                 reductions = [1, 2, 3, 4, 5]
-                item_stats = data['phase_1'].get(str(item_id))
+                item_stats = phase_data.get(str(item_id))
                 item_sat = saturations.get(str(item_id), 0.5)
                 
                 if item_stats:
@@ -844,7 +727,7 @@ def main():
                         
                         try:
                             _, profit_h_base, _ = trouver_profit_maximum(
-                                str(item_id), item_stats, q, item_sat, bonus_ui,
+                                str(item_id), item_stats, q, item_sat, st.session_state.bonus_ui,
                                 prix_market, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                             )
                         except Exception:
@@ -859,7 +742,7 @@ def main():
                             reduced_price = prix_market * (1 - pct/100.0)
                             try:
                                 _, profit_h_red, _ = trouver_profit_maximum(
-                                    str(item_id), item_stats, q, item_sat, bonus_ui,
+                                    str(item_id), item_stats, q, item_sat, st.session_state.bonus_ui,
                                     reduced_price, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                                 )
                                 # Comparaison avec LE MEILLEUR PROFIT DU MARCHÉ GLOBAL
@@ -929,12 +812,12 @@ def main():
             man_p = st.number_input("Prix d'achat unitaire ($)", min_value=0.0, value=0.0, step=100.0)
             
         if st.button("Calculer la rentabilité de ce contrat"):
-            item_stats = data['phase_1'].get(str(item_id))
+            item_stats = phase_data.get(str(item_id))
             item_sat = get_all_saturations().get(str(item_id), 0.5)
             
             if item_stats and man_p > 0:
                 prix_opt, prof_h, stats_opt = trouver_profit_maximum(
-                    str(item_id), item_stats, man_q, item_sat, bonus_ui,
+                    str(item_id), item_stats, man_q, item_sat, st.session_state.bonus_ui,
                     man_p, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                 )
                 
@@ -952,13 +835,13 @@ def main():
         st.header(f"⚙️ Paramètres de {current_user}")
         st.markdown("Les modifications sont **sauvegardées automatiquement** sur votre profil.")
         
-        def on_settings_change():
+        def on_settings_change(): # Callback to save changes instantly
             users_data[current_user]["bonus_ui"] = st.session_state.input_bonus
             for nom_bat in batiments_disponibles:
                 users_data[current_user]["buildings"][nom_bat]["niv_bat"] = st.session_state[f"input_niv_{nom_bat}"]
                 users_data[current_user]["buildings"][nom_bat]["salaire_bat"] = st.session_state[f"input_sal_{nom_bat}"]
             save_users(users_data)
-            st.session_state.custom_config = users_data[current_user]["buildings"]
+            st.session_state.custom_config = users_data[current_user]["buildings"] # Update live session
             st.session_state.bonus_ui = users_data[current_user]["bonus_ui"]
 
         st.number_input("Bonus UI (Vitesse)", min_value=1.0, max_value=2.0, value=st.session_state.bonus_ui, step=0.01, key="input_bonus", on_change=on_settings_change)
@@ -984,8 +867,7 @@ def main():
         **Fonctionnalités:**
         - 🔍 Scan automatique multi-bâtiments
         - 📈 Analyse détaillée par item
-        - 📉 Suivi historique de saturation
-        - 💼 Directeur financier pour allocation de budget
+        - 📉 Suivi de saturation
         - 🤝 Tableau de négociation de contrats
         - 💾 Cache des données pour limiter les appels API
         
