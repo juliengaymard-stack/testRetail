@@ -328,7 +328,7 @@ def get_saturation_trends(history, top_n=20, eligible_ids=None):
 
 @st.cache_data(ttl=300)
 def get_best_offers_by_quality(id_obj):
-    """Récupère les offres du marché avec un cache global pour éviter les doublons."""
+    """Récupère les offres du marché. Pour une qualité Q, retourne le prix minimum parmi toutes les offres de qualité >= Q."""
     url = f"https://www.simcompanies.com/api/v3/market/0/{id_obj}/"
     for attempt in range(5):
         try:
@@ -347,16 +347,33 @@ def get_best_offers_by_quality(id_obj):
             data = response.json()
             orders = data.get("sellOrders", []) if isinstance(data, dict) else data
             
-            best_prices = {}
+            raw_best_prices = {}
             for order in orders:
                 q = order.get("quality", 0)
                 p = order.get("price", 0)
                 qty = order.get("quantity", 0)
                 if p > 0:
-                    if q not in best_prices or p < best_prices[q]["price"]:
-                        best_prices[q] = {"price": p, "quantity": qty}
-                    elif p == best_prices[q]["price"]:
-                        best_prices[q]["quantity"] += qty
+                    if q not in raw_best_prices or p < raw_best_prices[q]["price"]:
+                        raw_best_prices[q] = {"price": p, "quantity": qty, "real_q": q}
+                    elif p == raw_best_prices[q]["price"]:
+                        raw_best_prices[q]["quantity"] += qty
+                        
+            best_prices = {}
+            if raw_best_prices:
+                max_q = max(raw_best_prices.keys())
+                current_best_p = float('inf')
+                current_best_info = None
+                for q in range(max_q, -1, -1):
+                    if q in raw_best_prices:
+                        if raw_best_prices[q]["price"] < current_best_p:
+                            current_best_p = raw_best_prices[q]["price"]
+                            current_best_info = raw_best_prices[q]
+                    if current_best_info is not None:
+                        best_prices[q] = {
+                            "price": current_best_info["price"],
+                            "quantity": current_best_info["quantity"],
+                            "real_q": current_best_info["real_q"]
+                        }
             return best_prices
         except Exception:
             time.sleep(0.1)
@@ -452,9 +469,10 @@ def main():
     # Onglets
     saturation_api_data = fetch_saturation_data()
     history = load_saturation_history()
-    tab_scan, tab_sat, tab_contrats, tab_settings, tab_about = st.tabs([
+    tab_scan, tab_sat, tab_selling, tab_contrats, tab_settings, tab_about = st.tabs([
         "🚀 Scanner",
         "📉 Saturation",
+        "🏷️ Prix de Vente",
         "🤝 Contrats",
         "⚙️ Paramètres",
         "ℹ️ À Propos"
@@ -499,6 +517,9 @@ def main():
                 meilleures_offres = get_best_offers_by_quality(obj_id)
 
                 for qualite, prix_info in meilleures_offres.items():
+                    if qualite != prix_info.get("real_q", qualite):
+                        continue # Ignore les qualités dérivées dans le scanner pour ne pas faire de doublons
+                        
                     prix_achat = prix_info['price']
                     stock = prix_info.get('quantity', 0)
                     
@@ -661,6 +682,106 @@ def main():
         else:
             st.warning("Aucune donnée de saturation disponible. Lancez un scan ou vérifiez la connexion API.")
 
+    with tab_selling:
+        st.header("🏷️ Calculateur de Prix de Vente")
+        st.markdown("Déterminez le prix de vente optimal pour un objet que vous possédez ou prévoyez d'acheter.")
+
+        col_b, col_i, col_q = st.columns(3)
+        with col_b:
+            batiment_vente = st.selectbox("Bâtiment", batiments_disponibles, key="sell_building")
+        with col_i:
+            item_ids_vente = CONFIG_BATIMENTS[batiment_vente]["ids"]
+            id_to_name_vente = {str(i): get_item_name(i, phase_data) for i in item_ids_vente}
+            item_name_vente = st.selectbox("Produit", [id_to_name_vente[str(i)] for i in item_ids_vente], key="sell_item")
+            item_id_vente = next(k for k, v in id_to_name_vente.items() if v == item_name_vente)
+        with col_q:
+            q_vente = st.number_input("Qualité", min_value=0, max_value=12, value=0, step=1, key="sell_q")
+
+        method = st.radio("Méthode d'analyse des coûts", [
+            "1️⃣ Prix d'achat fixe (J'ai un prix précis en tête)",
+            "2️⃣ Contrat sous le prix du marché (Ex: -3% du marché)",
+            "3️⃣ Coût d'opportunité (J'ai déjà l'objet, je veux maximiser mon profit en prenant en compte la meilleure alternative marché)"
+        ])
+
+        prix_achat_calc = 0.0
+        salaire_reel = st.session_state.custom_config[batiment_vente]["salaire_bat"]
+        niv_bat = st.session_state.custom_config[batiment_vente]["niv_bat"]
+        bonus_ui = st.session_state.bonus_ui
+        
+        if method.startswith("1️⃣"):
+            prix_achat_calc = st.number_input("Prix d'achat unitaire ($)", min_value=0.0, value=0.0, step=1.0)
+        elif method.startswith("2️⃣"):
+            pct_reduc = st.number_input("Réduction par rapport au marché (%)", min_value=0.0, max_value=100.0, value=3.0, step=0.1)
+            offres = get_best_offers_by_quality(item_id_vente)
+            if q_vente in offres:
+                prix_marche = offres[q_vente]['price']
+                real_q = offres[q_vente].get('real_q', q_vente)
+                st.info(f"Prix du marché actuel pour Q{q_vente} (Couvert par Q{real_q}) : **${prix_marche:.2f}**")
+                prix_achat_calc = prix_marche * (1 - pct_reduc / 100.0)
+                st.write(f"Prix d'achat calculé : **${prix_achat_calc:.2f}**")
+            else:
+                st.warning("Aucune offre sur le marché pour cette qualité ou supérieure.")
+                prix_achat_calc = -1
+        elif method.startswith("3️⃣"):
+            st.info("L'algorithme va scanner le marché pour trouver la meilleure rentabilité actuelle de ce bâtiment et s'en servir comme coût de votre temps.")
+
+        if st.button("Calculer le Prix Optimal", type="primary"):
+            if method.startswith("2️⃣") and prix_achat_calc < 0:
+                st.error("Calcul impossible sans prix de marché.")
+            else:
+                with st.spinner("Analyse et calcul en cours..."):
+                    sat = get_all_saturations().get(str(item_id_vente), 0.5)
+                    stats = phase_data.get(str(item_id_vente))
+                    
+                    if not stats:
+                        st.error("Données de l'objet introuvables.")
+                    else:
+                        if method.startswith("3️⃣"):
+                            saturations = get_all_saturations()
+                            best_market_profit = 0.0
+                            for b_item_id in item_ids_vente:
+                                if str(b_item_id) not in phase_data: continue
+                                b_stats = phase_data[str(b_item_id)]
+                                b_sat = saturations.get(str(b_item_id), 0.5)
+                                b_offres = get_best_offers_by_quality(b_item_id)
+                                for b_q, b_info in b_offres.items():
+                                    b_prix = b_info['price'] if isinstance(b_info, dict) else b_info
+                                    _, b_prof, _ = trouver_profit_maximum(
+                                        str(b_item_id), b_stats, b_q, b_sat, bonus_ui,
+                                        b_prix, 1, salaire_reel, niv_bat
+                                    )
+                                    if b_prof > best_market_profit:
+                                        best_market_profit = b_prof
+                            
+                            st.success(f"Meilleur profit marché actuel identifié (Coût de votre temps) : **${best_market_profit:.2f}/h**")
+                            prix_opt, _, _ = trouver_profit_maximum(
+                                str(item_id_vente), stats, q_vente, sat, bonus_ui,
+                                0.0, 1, salaire_reel + best_market_profit, niv_bat
+                            )
+                            temps_sec = calculer_temps_final(str(item_id_vente), stats, q_vente, sat, bonus_ui, prix_opt, 1, niv_bat)
+                            if temps_sec > 0:
+                                profit_h_reel = (prix_opt / (temps_sec / 3600)) - salaire_reel
+                            else:
+                                profit_h_reel = 0
+                        else:
+                            prix_opt, profit_h_reel, opt_res = trouver_profit_maximum(
+                                str(item_id_vente), stats, q_vente, sat, bonus_ui,
+                                prix_achat_calc, 1, salaire_reel, niv_bat
+                            )
+                            temps_sec = opt_res["temps_vente"]
+                            
+                        if temps_sec > 0:
+                            st.markdown(f"### 🎯 Prix de vente optimal : **${prix_opt:.2f}**")
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Profit par Heure", f"${profit_h_reel:.2f}")
+                            if not method.startswith("3️⃣"):
+                                c2.metric("Profit par Unité", f"${(prix_opt - prix_achat_calc):.2f}")
+                            else:
+                                c2.metric("Marge Nette (Unité)", f"${prix_opt:.2f}")
+                            c3.metric("Temps de vente", format_temps(temps_sec))
+                        else:
+                            st.error("Impossible de trouver un prix de vente rentable (temps de vente négatif ou infini).")
+
     with tab_contrats:
         st.header("🤝 Négociation de contrats")
         batiment_contract = st.selectbox("Bâtiment pour négocier", batiments_disponibles, key="contract_building")
@@ -725,16 +846,17 @@ def main():
                     for q, info in offres_item.items():
                         prix_market = info['price'] if isinstance(info, dict) else info
                         
+                        real_q = info.get("real_q", q)
                         try:
                             _, profit_h_base, _ = trouver_profit_maximum(
-                                str(item_id), item_stats, q, item_sat, st.session_state.bonus_ui,
+                                str(item_id), item_stats, real_q, item_sat, st.session_state.bonus_ui,
                                 prix_market, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                             )
                         except Exception:
                             profit_h_base = 0
 
                         row = {
-                            'Qualité': f"Q{q}",
+                            'Qualité': f"Q{q}" + (f" (Achat Q{real_q})" if real_q != q else ""),
                             'Prix marché ($)': f"{prix_market:.2f}",
                             'Profit/h marché ($)': f"{profit_h_base:.2f}"
                         }
