@@ -989,6 +989,29 @@ def main():
                         man_p, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
                     )
                 
+                    # --- RECHERCHE DU MEILLEUR ITEM DU BATIMENT SUR LE MARCHE ---
+                    best_market_profit_building = 0.0
+                    best_market_item_building = "Aucun"
+                    saturations = get_all_saturations()
+                    
+                    for b_item_id in item_ids:
+                        if str(b_item_id) not in phase_data: continue
+                        b_stats = phase_data[str(b_item_id)]
+                        b_sat = saturations.get(str(b_item_id), 0.5)
+                        b_offres = get_best_offers_by_quality(b_item_id)
+                        if b_offres is None: continue
+                        
+                        for b_q, b_info in b_offres.items():
+                            b_prix = b_info['price'] if isinstance(b_info, dict) else b_info
+                            _, b_prof, _ = trouver_profit_maximum(
+                                str(b_item_id), b_stats, b_q, b_sat, st.session_state.bonus_ui,
+                                b_prix, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
+                            )
+                            if b_prof > best_market_profit_building:
+                                best_market_profit_building = b_prof
+                                best_market_item_building = f"{get_item_name(b_item_id, phase_data)} (Q{b_q})"
+                    # ------------------------------------------------------------
+                
                 if prof_h > 0:
                     st.success("✅ **Contrat Rentable !**")
                     
@@ -1002,29 +1025,24 @@ def main():
                             st.warning(f"⚠️ Attention, vous achetez à **+{abs(reduction):.2f}%** au-dessus du prix du marché public !")
                         else:
                             st.markdown("⚖️ Vous achetez exactement au prix du marché public.")
-                            
-                        # --- NOUVEAU : Comparaison du profit/h avec le marché public ---
-                        _, prof_h_marche, _ = trouver_profit_maximum(
-                            str(item_id), item_stats, real_q, item_sat, st.session_state.bonus_ui,
-                            prix_marche, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
-                        )
-                        
-                        if prof_h_marche > 0:
-                            profit_diff = ((prof_h - prof_h_marche) / prof_h_marche) * 100
-                            if profit_diff > 0:
-                                st.markdown(f"🚀 **Surperformance :** Ce contrat génère <span style='color:#2ecc71;font-weight:bold'>+{profit_diff:.2f}%</span> de profit/h comparé à un achat sur le marché (qui donnerait **${prof_h_marche:.2f}/h**).", unsafe_allow_html=True)
-                            elif profit_diff < 0:
-                                st.markdown(f"🔻 **Sous-performance :** Ce contrat rapporte <span style='color:#e74c3c;font-weight:bold'>{profit_diff:.2f}%</span> de profit/h en moins par rapport au marché (qui donnerait **${prof_h_marche:.2f}/h**).", unsafe_allow_html=True)
-                            else:
-                                st.markdown(f"⚖️ Ce contrat génère exactement le même profit/h que le marché (**${prof_h_marche:.2f}/h**).")
-                        else:
-                            st.markdown(f"⚠️ Un achat direct sur le marché à ce prix ne serait **pas rentable** (Profit : **${prof_h_marche:.2f}/h**). Ce contrat est donc exceptionnel et rend la vente possible !")
-                        # ----------------------------------------------------------------
                         
                     elif offres_marche is None:
                         st.warning("⚠️ Impossible de comparer avec le marché : L'API SimCompanies est temporairement indisponible.")
                     else:
                         st.info(f"📊 **Analyse Marché public :** Aucune offre disponible sur le marché public pour Q{man_q} ou supérieur.")
+
+                    # --- NOUVEAU : Comparaison avec la meilleure opportunité globale du marché ---
+                    if best_market_profit_building > 0:
+                        profit_diff = ((prof_h - best_market_profit_building) / best_market_profit_building) * 100
+                        if profit_diff > 0:
+                            st.markdown(f"🚀 **Surperformance globale :** Ce contrat génère <span style='color:#2ecc71;font-weight:bold'>+{profit_diff:.2f}%</span> de profit/h par rapport à la meilleure offre du marché pour ce bâtiment (**{best_market_item_building}** à **${best_market_profit_building:.2f}/h**).", unsafe_allow_html=True)
+                        elif profit_diff < 0:
+                            st.markdown(f"🔻 **Coût d'opportunité :** Ce contrat rapporte <span style='color:#e74c3c;font-weight:bold'>{abs(profit_diff):.2f}%</span> de profit/h en moins par rapport à l'achat direct de **{best_market_item_building}** sur le marché (qui donnerait **${best_market_profit_building:.2f}/h**).", unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"⚖️ Ce contrat génère exactement le même profit/h que la meilleure offre marché (**{best_market_item_building}** à **${best_market_profit_building:.2f}/h**).")
+                    else:
+                        st.markdown(f"⚠️ Actuellement, aucune offre du marché n'est rentable pour ce bâtiment. Ce contrat est la seule source de profit !")
+                    # ----------------------------------------------------------------
 
                     cm1, cm2, cm3, cm4 = st.columns(4)
                     cm1.metric("Revente Opt.", f"${prix_opt:.2f}")
