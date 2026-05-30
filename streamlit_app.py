@@ -325,9 +325,10 @@ def get_saturation_trends(history, top_n=20, eligible_ids=None):
     falling = deltas[-top_n:][::-1]
     return rising, falling
 
+class APIRateLimitError(Exception): pass
 
 @st.cache_data(ttl=300)
-def get_best_offers_by_quality(id_obj):
+def _get_best_offers_cached(id_obj):
     """Récupère les offres du marché. Pour une qualité Q, retourne le prix minimum parmi toutes les offres de qualité >= Q."""
     url = f"https://www.simcompanies.com/api/v3/market/0/{id_obj}/"
     for attempt in range(5):
@@ -335,14 +336,14 @@ def get_best_offers_by_quality(id_obj):
             # Réduction du timeout pour éviter que le reverse-proxy du Cloud ne lance une erreur 500
             response = requests.get(url, timeout=5)
             if response.status_code == 429:
-                time.sleep((2 ** attempt) + 1) 
+                time.sleep((2 ** attempt) + 1.5) 
                 continue
             if response.status_code != 200:
-                time.sleep(0.5)
+                time.sleep(1)
                 continue
             
             # Délai de courtoisie après un succès pour ne pas saturer l'API
-            time.sleep(0.15)
+            time.sleep(0.2)
             
             data = response.json()
             orders = data.get("sellOrders", []) if isinstance(data, dict) else data
@@ -376,8 +377,15 @@ def get_best_offers_by_quality(id_obj):
                         }
             return best_prices
         except Exception:
-            time.sleep(0.1)
-    return {}
+            time.sleep(0.5)
+    # Déclenche une erreur plutôt que de retourner {} pour éviter que Streamlit ne cache un échec API
+    raise APIRateLimitError("API Rate Limit")
+
+def get_best_offers_by_quality(id_obj):
+    try:
+        return _get_best_offers_cached(id_obj)
+    except Exception:
+        return None
 
 
 def get_item_name(obj_id, phase_data):
@@ -515,6 +523,8 @@ def main():
                 stats = phase_data[str(obj_id)]
                 sat_reelle = saturations_globales.get(str(obj_id), 0.5)
                 meilleures_offres = get_best_offers_by_quality(obj_id)
+
+                if meilleures_offres is None: continue
 
                 for qualite, prix_info in meilleures_offres.items():
                     if qualite != prix_info.get("real_q", qualite):
@@ -713,7 +723,10 @@ def main():
         elif method.startswith("2️⃣"):
             pct_reduc = st.number_input("Réduction par rapport au marché (%)", min_value=0.0, max_value=100.0, value=3.0, step=0.1)
             offres = get_best_offers_by_quality(item_id_vente)
-            if q_vente in offres:
+            if offres is None:
+                st.error("Erreur API : Impossible de vérifier le marché. Veuillez réesayer.")
+                prix_achat_calc = -1
+            elif q_vente in offres:
                 prix_marche = offres[q_vente]['price']
                 real_q = offres[q_vente].get('real_q', q_vente)
                 st.info(f"Prix du marché actuel pour Q{q_vente} (Couvert par Q{real_q}) : **${prix_marche:.2f}**")
@@ -738,7 +751,10 @@ def main():
                     else:
                         if method.startswith("3️⃣"):
                             offres_item = get_best_offers_by_quality(item_id_vente)
-                            if q_vente in offres_item:
+                            if offres_item is None:
+                                prix_marche = stats["modeledProductionCostPerUnit"]
+                                st.warning(f"Erreur API. Base de coût estimée : **${prix_marche:.2f}**")
+                            elif q_vente in offres_item:
                                 prix_marche = offres_item[q_vente]['price']
                                 real_q = offres_item[q_vente].get('real_q', q_vente)
                                 st.info(f"Prix du marché (Base de coût) : **${prix_marche:.2f}** (Q{real_q})")
@@ -753,6 +769,7 @@ def main():
                                 b_stats = phase_data[str(b_item_id)]
                                 b_sat = saturations.get(str(b_item_id), 0.5)
                                 b_offres = get_best_offers_by_quality(b_item_id)
+                                if b_offres is None: continue
                                 for b_q, b_info in b_offres.items():
                                     b_prix = b_info['price'] if isinstance(b_info, dict) else b_info
                                     _, b_prof, _ = trouver_profit_maximum(
@@ -834,6 +851,7 @@ def main():
                     b_stats = phase_data[str(b_item_id)]
                     b_sat = saturations.get(str(b_item_id), 0.5)
                     b_offres = get_best_offers_by_quality(b_item_id)
+                    if b_offres is None: continue
                     
                     for b_q, b_info in b_offres.items():
                         b_prix = b_info['price'] if isinstance(b_info, dict) else b_info
@@ -859,7 +877,9 @@ def main():
                 item_stats = phase_data.get(str(item_id))
                 item_sat = saturations.get(str(item_id), 0.5)
                 
-                if item_stats:
+                if offres_item is None:
+                    st.error("⚠️ L'API SimCompanies est surchargée. Veuillez réessayer dans quelques instants.")
+                elif item_stats:
                     for q, info in offres_item.items():
                         prix_market = info['price'] if isinstance(info, dict) else info
                         
@@ -936,32 +956,57 @@ def main():
 
                     html = df_html.to_html(index=False, escape=False)
                     st.markdown(html, unsafe_allow_html=True)
-                else:
-                    st.warning("Aucune offre de marché disponible pour ce produit (Il n'est pas vendu sur le marché public).")
+                elif offres_item is not None:
+                    st.warning("Aucune offre de marché disponible pour ce produit (Il n'est pas vendu sur le marché public actuellement).")
 
         # EVALUATION MANUELLE DE CONTRAT (Pour Camions / Vehicules)
         st.markdown("---")
         st.subheader("📝 Évaluation Manuelle de Contrat")
-        st.info("Utilisez cet outil pour les véhicules (Camions, Voitures) qui ne sont pas vendus sur le marché public, ou pour tester une offre précise.")
+        st.info("Utilisez cet outil pour vérifier manuellement la rentabilité d'un contrat spécifique, avec comparaison directe du marché.")
         
         col_q, col_p = st.columns(2)
         with col_q:
             man_q = st.number_input("Qualité proposée", min_value=0, max_value=12, value=0, step=1)
         with col_p:
-            man_p = st.number_input("Prix d'achat unitaire ($)", min_value=0.0, value=0.0, step=100.0)
+            man_p = st.number_input("Prix d'achat unitaire ($)", min_value=0.0, value=0.0, step=10.0)
             
         if st.button("Calculer la rentabilité de ce contrat"):
             item_stats = phase_data.get(str(item_id))
             item_sat = get_all_saturations().get(str(item_id), 0.5)
             
             if item_stats and man_p > 0:
-                prix_opt, prof_h, stats_opt = trouver_profit_maximum(
-                    str(item_id), item_stats, man_q, item_sat, st.session_state.bonus_ui,
-                    man_p, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
-                )
+                with st.spinner("Analyse du marché en cours..."):
+                    offres_marche = get_best_offers_by_quality(item_id)
+                    prix_marche = None
+                    real_q = None
+                    
+                    if offres_marche and man_q in offres_marche:
+                        prix_marche = offres_marche[man_q]['price']
+                        real_q = offres_marche[man_q].get('real_q', man_q)
+
+                    prix_opt, prof_h, stats_opt = trouver_profit_maximum(
+                        str(item_id), item_stats, man_q, item_sat, st.session_state.bonus_ui,
+                        man_p, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
+                    )
                 
                 if prof_h > 0:
                     st.success("✅ **Contrat Rentable !**")
+                    
+                    if prix_marche:
+                        reduction = (1 - (man_p / prix_marche)) * 100
+                        st.info(f"📊 **Analyse Marché public :** Le prix le plus bas pour **Q{man_q}** (couvert par Q{real_q}) est de **${prix_marche:.2f}**.")
+                        
+                        if reduction > 0:
+                            st.markdown(f"🔥 Vous achetez à <span style='color:#2ecc71;font-weight:bold'>-{reduction:.2f}%</span> sous le prix du marché public.", unsafe_allow_html=True)
+                        elif reduction < 0:
+                            st.warning(f"⚠️ Attention, vous achetez à **+{abs(reduction):.2f}%** au-dessus du prix du marché public !")
+                        else:
+                            st.markdown("⚖️ Vous achetez exactement au prix du marché public.")
+                    elif offres_marche is None:
+                        st.warning("⚠️ Impossible de comparer avec le marché : L'API SimCompanies est temporairement indisponible.")
+                    else:
+                        st.info(f"📊 **Analyse Marché public :** Aucune offre disponible sur le marché public pour Q{man_q} ou supérieur.")
+
                     cm1, cm2, cm3, cm4 = st.columns(4)
                     cm1.metric("Revente Opt.", f"${prix_opt:.2f}")
                     cm2.metric("Profit/h", f"${prof_h:.2f}")
