@@ -1002,6 +1002,25 @@ def main():
                             st.warning(f"⚠️ Attention, vous achetez à **+{abs(reduction):.2f}%** au-dessus du prix du marché public !")
                         else:
                             st.markdown("⚖️ Vous achetez exactement au prix du marché public.")
+                            
+                        # --- NOUVEAU : Comparaison du profit/h avec le marché public ---
+                        _, prof_h_marche, _ = trouver_profit_maximum(
+                            str(item_id), item_stats, real_q, item_sat, st.session_state.bonus_ui,
+                            prix_marche, 1, config_actuelle['salaire_bat'], config_actuelle['niv_bat']
+                        )
+                        
+                        if prof_h_marche > 0:
+                            profit_diff = ((prof_h - prof_h_marche) / prof_h_marche) * 100
+                            if profit_diff > 0:
+                                st.markdown(f"🚀 **Surperformance :** Ce contrat génère <span style='color:#2ecc71;font-weight:bold'>+{profit_diff:.2f}%</span> de profit/h comparé à un achat sur le marché (qui donnerait **${prof_h_marche:.2f}/h**).", unsafe_allow_html=True)
+                            elif profit_diff < 0:
+                                st.markdown(f"🔻 **Sous-performance :** Ce contrat rapporte <span style='color:#e74c3c;font-weight:bold'>{profit_diff:.2f}%</span> de profit/h en moins par rapport au marché (qui donnerait **${prof_h_marche:.2f}/h**).", unsafe_allow_html=True)
+                            else:
+                                st.markdown(f"⚖️ Ce contrat génère exactement le même profit/h que le marché (**${prof_h_marche:.2f}/h**).")
+                        else:
+                            st.markdown(f"⚠️ Un achat direct sur le marché à ce prix ne serait **pas rentable** (Profit : **${prof_h_marche:.2f}/h**). Ce contrat est donc exceptionnel et rend la vente possible !")
+                        # ----------------------------------------------------------------
+                        
                     elif offres_marche is None:
                         st.warning("⚠️ Impossible de comparer avec le marché : L'API SimCompanies est temporairement indisponible.")
                     else:
