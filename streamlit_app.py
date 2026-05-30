@@ -53,8 +53,8 @@ CONFIG_BATIMENTS = {
         "ids": ["24", "25", "26", "27", "28", "98"]
     },
     "Car Dealership": {
-        "niv_bat": 3,
-        "salaire_bat": 1266,
+        "niv_bat": 4,
+        "salaire_bat": 1723,
         "ids": ["53", "54", "55", "56", "57"]
     },
     "Fashion Store": {
@@ -737,6 +737,15 @@ def main():
                         st.error("Données de l'objet introuvables.")
                     else:
                         if method.startswith("3️⃣"):
+                            offres_item = get_best_offers_by_quality(item_id_vente)
+                            if q_vente in offres_item:
+                                prix_marche = offres_item[q_vente]['price']
+                                real_q = offres_item[q_vente].get('real_q', q_vente)
+                                st.info(f"Prix du marché (Base de coût) : **${prix_marche:.2f}** (Q{real_q})")
+                            else:
+                                prix_marche = stats["modeledProductionCostPerUnit"]
+                                st.warning(f"Aucune offre. Base de coût estimée : **${prix_marche:.2f}**")
+                                
                             saturations = get_all_saturations()
                             best_market_profit = 0.0
                             for b_item_id in item_ids_vente:
@@ -754,15 +763,22 @@ def main():
                                         best_market_profit = b_prof
                             
                             st.success(f"Meilleur profit marché actuel identifié (Coût de votre temps) : **${best_market_profit:.2f}/h**")
-                            prix_opt, _, _ = trouver_profit_maximum(
+                            
+                            # --- OPTIMISATION SPÉCIFIQUE METHODE 3 ---
+                            # On réutilise la fonction robuste trouver_profit_maximum qui gère déjà l'asymptote et les divisions par zéro
+                            prix_opt, profit_h_reel, opt_res = trouver_profit_maximum(
                                 str(item_id_vente), stats, q_vente, sat, bonus_ui,
-                                0.0, 1, salaire_reel + best_market_profit, niv_bat
+                                prix_marche, 1, salaire_reel, niv_bat
                             )
-                            temps_sec = calculer_temps_final(str(item_id_vente), stats, q_vente, sat, bonus_ui, prix_opt, 1, niv_bat)
+                            temps_sec = opt_res["temps_vente"]
+                            prix_achat_calc = prix_marche
+                            
                             if temps_sec > 0:
-                                profit_h_reel = (prix_opt / (temps_sec / 3600)) - salaire_reel
+                                t_heures = temps_sec / 3600
+                                valeur_ajoutee = (prix_opt - prix_marche) - (salaire_reel + best_market_profit) * t_heures
                             else:
-                                profit_h_reel = 0
+                                valeur_ajoutee = 0.0
+                            # -----------------------------------------
                         else:
                             prix_opt, profit_h_reel, opt_res = trouver_profit_maximum(
                                 str(item_id_vente), stats, q_vente, sat, bonus_ui,
@@ -773,11 +789,12 @@ def main():
                         if temps_sec > 0:
                             st.markdown(f"### 🎯 Prix de vente optimal : **${prix_opt:.2f}**")
                             c1, c2, c3 = st.columns(3)
-                            c1.metric("Profit par Heure", f"${profit_h_reel:.2f}")
                             if not method.startswith("3️⃣"):
+                                c1.metric("Profit par Heure", f"${profit_h_reel:.2f}")
                                 c2.metric("Profit par Unité", f"${(prix_opt - prix_achat_calc):.2f}")
                             else:
-                                c2.metric("Marge Nette (Unité)", f"${prix_opt:.2f}")
+                                c1.metric("Génération Cash/h", f"${profit_h_reel:.2f}", help="Cash brut généré par heure moins les salaires.")
+                                c2.metric("Valeur Ajoutée", f"${valeur_ajoutee:.2f}", help="Surplus de valeur unitaire créé comparé à la vente du meilleur objet disponible sur le marché.")
                             c3.metric("Temps de vente", format_temps(temps_sec))
                         else:
                             st.error("Impossible de trouver un prix de vente rentable (temps de vente négatif ou infini).")
@@ -958,13 +975,14 @@ def main():
         st.markdown("Les modifications sont **sauvegardées automatiquement** sur votre profil.")
         
         def on_settings_change(): # Callback to save changes instantly
-            users_data[current_user]["bonus_ui"] = st.session_state.input_bonus
+            current_data = load_users()
+            current_data[current_user]["bonus_ui"] = st.session_state.input_bonus
             for nom_bat in batiments_disponibles:
-                users_data[current_user]["buildings"][nom_bat]["niv_bat"] = st.session_state[f"input_niv_{nom_bat}"]
-                users_data[current_user]["buildings"][nom_bat]["salaire_bat"] = st.session_state[f"input_sal_{nom_bat}"]
-            save_users(users_data)
-            st.session_state.custom_config = users_data[current_user]["buildings"] # Update live session
-            st.session_state.bonus_ui = users_data[current_user]["bonus_ui"]
+                current_data[current_user]["buildings"][nom_bat]["niv_bat"] = st.session_state[f"input_niv_{nom_bat}"]
+                current_data[current_user]["buildings"][nom_bat]["salaire_bat"] = st.session_state[f"input_sal_{nom_bat}"]
+            save_users(current_data)
+            st.session_state.custom_config = current_data[current_user]["buildings"] # Update live session
+            st.session_state.bonus_ui = current_data[current_user]["bonus_ui"]
 
         st.number_input("Bonus UI (Vitesse)", min_value=1.0, max_value=2.0, value=st.session_state.bonus_ui, step=0.01, key="input_bonus", on_change=on_settings_change)
         
