@@ -51,7 +51,10 @@ def calculer_resistance_prix(resistivite, prix_ref, prix_vente, salaire, cout_pr
     return resistivite - (prix_vente - prix_ref)**2 * elasticite_prix
 
 def calculer_temps_vente_secondes(velocite, cout_prod, salaire, prix, multiplicateur_bonus):
-    return (multiplicateur_bonus * ((prix - cout_prod) * 3600) - salaire) / (velocite + salaire)
+    denominateur = velocite + salaire
+    if denominateur <= 0:
+        return -1
+    return (multiplicateur_bonus * (prix - cout_prod) * 3600) / denominateur
 
 def calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix, quantite, niveau_bat):
     multiplicateur_bonus = 1 / bonus_ui 

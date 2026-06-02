@@ -37,6 +37,11 @@ def inject_custom_css():
 # =====================================================================
 
 CONFIG_BATIMENTS = {
+    "Car Dealership": {
+        "niv_bat": 4,
+        "salaire_bat": 1723,
+        "ids": ["53", "54", "55", "56", "57"]
+    },
     "Groceries Store": {
         "niv_bat": 5,
         "salaire_bat": 767,
@@ -51,11 +56,6 @@ CONFIG_BATIMENTS = {
         "niv_bat": 1,
         "salaire_bat": 190,
         "ids": ["24", "25", "26", "27", "28", "98"]
-    },
-    "Car Dealership": {
-        "niv_bat": 4,
-        "salaire_bat": 1723,
-        "ids": ["53", "54", "55", "56", "57"]
     },
     "Fashion Store": {
         "niv_bat": 3,
@@ -88,7 +88,7 @@ def calculer_temps_vente_secondes(velocite, cout_prod, salaire, prix, multiplica
     denominateur = velocite + salaire
     if denominateur <= 0:
         return -1
-    return (multiplicateur_bonus * ((prix - cout_prod) * 3600) - salaire) / denominateur
+    return (multiplicateur_bonus * (prix - cout_prod) * 3600) / denominateur
 
 def calculer_temps_final(id_obj, stats, qualite, saturation, bonus_ui, prix, quantite, niveau_bat):
     multiplicateur_bonus = 1 / bonus_ui 
@@ -477,11 +477,11 @@ def main():
     # Onglets
     saturation_api_data = fetch_saturation_data()
     history = load_saturation_history()
-    tab_scan, tab_sat, tab_selling, tab_contrats, tab_settings, tab_about = st.tabs([
+    tab_contrats, tab_scan, tab_sat, tab_selling, tab_settings, tab_about = st.tabs([
+        "🤝 Contrats",
         "🚀 Scanner",
         "📉 Saturation",
         "🏷️ Prix de Vente",
-        "🤝 Contrats",
         "⚙️ Paramètres",
         "ℹ️ À Propos"
     ])
